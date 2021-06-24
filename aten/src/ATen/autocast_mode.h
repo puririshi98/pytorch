@@ -207,3 +207,4 @@ inline at::ScalarType type_from_firstarg(at::ScalarType to_type, const Tensor& a
 
 } // namespace autocast
 } // namespace at
+
