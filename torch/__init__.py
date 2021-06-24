@@ -1,10 +1,8 @@
-
 r"""
 The torch package contains data structures for multi-dimensional
 tensors and defines mathematical operations over these tensors.
 Additionally, it provides many utilities for efficient serializing of
 Tensors and arbitrary types, and other useful utilities.
-
 It has a CUDA counterpart, that enables you to run your tensor computations
 on an NVIDIA GPU with compute capability >= 3.0.
 """
@@ -35,7 +33,7 @@ __all__ = [
     'typename', 'is_tensor', 'is_storage', 'set_default_tensor_type',
     'set_rng_state', 'get_rng_state', 'manual_seed', 'initial_seed', 'seed',
     'save', 'load', 'set_printoptions', 'chunk', 'split', 'stack', 'matmul',
-    'no_grad', 'enable_grad', 'rand', 'randn',
+    'no_grad', 'enable_grad', 'rand', 'randn', 'inference_mode',
     'DoubleStorage', 'FloatStorage', 'LongStorage', 'IntStorage',
     'ShortStorage', 'CharStorage', 'ByteStorage', 'BoolStorage',
     'DoubleTensor', 'FloatTensor', 'LongTensor', 'IntTensor',
@@ -218,7 +216,6 @@ except ImportError:
                 are expected in the `torch._C` namespace. This can occur when
                 using the `install` workflow. e.g.
                     $ python setup.py install && python -c "import torch"
-
                 This error can generally be solved using the `develop` workflow
                     $ python setup.py develop && python -c "import torch"  # This should succeed
                 or by running Python from a different directory.
@@ -270,27 +267,22 @@ def typename(o):
 
 def is_tensor(obj):
     r"""Returns True if `obj` is a PyTorch tensor.
-
     Note that this function is simply doing ``isinstance(obj, Tensor)``.
     Using that ``isinstance`` check is better for typechecking with mypy,
     and more explicit - so it's recommended to use that instead of
     ``is_tensor``.
-
     Args:
         obj (Object): Object to test
     Example::
-
         >>> x=torch.tensor([1,2,3])
         >>> torch.is_tensor(x)
         True
-
     """
     return isinstance(obj, torch.Tensor)
 
 
 def is_storage(obj):
     r"""Returns True if `obj` is a PyTorch storage object.
-
     Args:
         obj (Object): Object to test
     """
@@ -301,20 +293,15 @@ def set_default_tensor_type(t):
     r"""Sets the default ``torch.Tensor`` type to floating point tensor type
     ``t``. This type will also be used as default floating point type for
     type inference in :func:`torch.tensor`.
-
     The default floating point tensor type is initially ``torch.FloatTensor``.
-
     Args:
         t (type or string): the floating point tensor type or its name
-
     Example::
-
         >>> torch.tensor([1.2, 3]).dtype    # initial default for floating point is torch.float32
         torch.float32
         >>> torch.set_default_tensor_type(torch.DoubleTensor)
         >>> torch.tensor([1.2, 3]).dtype    # a new floating point tensor
         torch.float64
-
     """
     if isinstance(t, _string_classes):
         t = _import_dotted_name(t)
@@ -324,17 +311,13 @@ def set_default_tensor_type(t):
 def set_default_dtype(d):
     r"""Sets the default floating point dtype to :attr:`d`.
     This dtype is:
-
     1. The inferred dtype for python floats in :func:`torch.tensor`.
     2. Used to infer dtype for python complex numbers. The default complex dtype is set to
        ``torch.complex128`` if default floating point dtype is ``torch.float64``,
        otherwise it's set to ``torch.complex64``
-
     The default floating point dtype is initially ``torch.float32``.
-
     Args:
         d (:class:`torch.dtype`): the floating point dtype to make the default
-
     Example:
         >>> # initial default for floating point is torch.float32
         >>> torch.tensor([1.2, 3]).dtype
@@ -347,7 +330,6 @@ def set_default_dtype(d):
         torch.float64
         >>> torch.tensor([1.2, 3j]).dtype   # a new complex tensor
         torch.complex128
-
     """
     _C._set_default_dtype(d)
 
@@ -358,14 +340,8 @@ def use_deterministic_algorithms(mode):
     When enabled, operations will use deterministic algorithms when available,
     and if only nondeterministic algorithms are available they will throw a
     :class:`RuntimeError` when called.
-
-    .. warning::
-        This feature is in beta, and its design and implementation may change
-        in the future.
-
     The following normally-nondeterministic operations will act
     deterministically when ``mode=True``:
-
         * :class:`torch.nn.Conv1d` when called on CUDA tensor
         * :class:`torch.nn.Conv2d` when called on CUDA tensor
         * :class:`torch.nn.Conv3d` when called on CUDA tensor
@@ -375,20 +351,21 @@ def use_deterministic_algorithms(mode):
         * :func:`torch.bmm` when called on sparse-dense CUDA tensors
         * :func:`torch.Tensor.__getitem__` when attempting to differentiate a CPU tensor
           and the index is a list of tensors
+        * :func:`torch.Tensor.index_put` with ``accumulate=False``
         * :func:`torch.Tensor.index_put` with ``accumulate=True`` when called on a CPU
           tensor
         * :func:`torch.Tensor.put_` with ``accumulate=True`` when called on a CPU
           tensor
+        * :func:`torch.Tensor.scatter_add_` when ``input`` dimension is one and called
+          on a CUDA tensor
         * :func:`torch.gather` when ``input`` dimension is one and called
           on a CUDA tensor that requires grad
         * :func:`torch.index_add` when called on CUDA tensor
         * :func:`torch.index_select` when attempting to differentiate a CUDA tensor
         * :func:`torch.repeat_interleave` when attempting to differentiate a CUDA tensor
-        * :func:`torch.Tensor.index_copy` when called on a CPU tensor
-
+        * :func:`torch.Tensor.index_copy` when called on a CPU or CUDA tensor
     The following normally-nondeterministic operations will throw a
     :class:`RuntimeError` when ``mode=True``:
-
         * :class:`torch.nn.AvgPool3d` when attempting to differentiate a CUDA tensor
         * :class:`torch.nn.AdaptiveAvgPool2d` when attempting to differentiate a CUDA tensor
         * :class:`torch.nn.AdaptiveAvgPool3d` when attempting to differentiate a CUDA tensor
@@ -398,12 +375,10 @@ def use_deterministic_algorithms(mode):
         * :class:`torch.nn.FractionalMaxPool3d` when attempting to differentiate a CUDA tensor
         * :func:`torch.nn.functional.interpolate` when attempting to differentiate a CUDA tensor
           and one of the following modes is used:
-
           - ``linear``
           - ``bilinear``
           - ``bicubic``
           - ``trilinear``
-
         * :class:`torch.nn.ReflectionPad1d` when attempting to differentiate a CUDA tensor
         * :class:`torch.nn.ReflectionPad2d` when attempting to differentiate a CUDA tensor
         * :class:`torch.nn.ReplicationPad1d` when attempting to differentiate a CUDA tensor
@@ -413,55 +388,44 @@ def use_deterministic_algorithms(mode):
         * :class:`torch.nn.CTCLoss` when attempting to differentiate a CUDA tensor
         * :class:`torch.nn.EmbeddingBag` when attempting to differentiate a CUDA tensor when
           ``mode='max'``
-        * :func:`torch.Tensor.scatter_add_` when called on a CUDA tensor
-        * :func:`torch.Tensor.index_copy` when called on a CUDA tensor
-        * :func:`torch.Tensor.index_put_` when ``accumulate=False``
+        * :func:`torch.Tensor.scatter_add_` when ``input`` dimension is larger than one
+          and called on a CUDA tensor
+        * :func:`torch.gather` when ``input`` dimension is larger than one
+          and called on a CUDA tensor that requires grad
         * :func:`torch.Tensor.put_` when ``accumulate=False``
         * :func:`torch.Tensor.put_` when ``accumulate=True`` and called on a CUDA tensor
         * :func:`torch.histc` when called on a CUDA tensor
         * :func:`torch.bincount` when called on a CUDA tensor
         * :func:`torch.kthvalue` with called on a CUDA tensor
         * :func:`torch.median` with indices output when called on a CUDA tensor
-        * :func:`torch.gather` when ``input`` dimension is larger than one
-          and called on a CUDA tensor that requires grad
         * :func:`torch.nn.functional.grid_sample` when attempting to differentiate a CUDA tensor
-
     A handful of CUDA operations are nondeterministic if the CUDA version is
     10.2 or greater, unless the environment variable ``CUBLAS_WORKSPACE_CONFIG=:4096:8``
     or ``CUBLAS_WORKSPACE_CONFIG=:16:8`` is set. See the CUDA documentation for more
     details: `<https://docs.nvidia.com/cuda/cublas/index.html#cublasApi_reproducibility>`_
     If one of these environment variable configurations is not set, a :class:`RuntimeError`
     will be raised from these operations when called with CUDA tensors:
-
         * :func:`torch.mm`
         * :func:`torch.mv`
         * :func:`torch.bmm`
-
     Note that deterministic operations tend to have worse performance than
     nondeterministic operations.
-
     .. note::
-
         This flag does not detect or prevent nondeterministic behavior caused
         by calling an inplace operation on a tensor with an internal memory
         overlap or by giving such a tensor as the :attr:`out` argument for an
         operation. In these cases, multiple writes of different data may target
         a single memory location, and the order of writes is not guaranteed.
-
     Args:
         mode (:class:`bool`): If True, makes potentially nondeterministic
             operations switch to a deterministic algorithm or throw a runtime
             error. If False, allows nondeterministic operations.
-
     Example::
-
         >>> torch.use_deterministic_algorithms(True)
-
         # Forward mode nondeterministic error
         >>> torch.randn(10).index_copy(0, torch.tensor([0]), torch.randn(1))
         ...
         RuntimeError: index_copy does not have a deterministic implementation...
-
         # Backward mode nondeterministic error
         >>> torch.randn(10, requires_grad=True, device='cuda').index_select(0, torch.tensor([0], device='cuda')).backward()
         ...
@@ -500,7 +464,6 @@ def set_warn_always(b):
     appear once per process. This helps avoid excessive warning information.
     Setting it to True causes these warnings to always appear, which may be
     helpful when debugging.
-
     Args:
         b (:class:`bool`): If True, force warnings to always be emitted
                            If False, set to the default behaviour
@@ -675,11 +638,13 @@ def _assert(condition, message):
 # side effect of adding to the imported module's members for other users.
 
 from torch import cuda as cuda
+from torch import cpu as cpu
 from torch import autograd as autograd
 from torch.autograd import (
     no_grad as no_grad,
     enable_grad as enable_grad,
     set_grad_enabled as set_grad_enabled,
+    inference_mode as inference_mode,
 )
 from torch import fft as fft
 from torch import futures as futures
@@ -710,6 +675,16 @@ import torch.utils.data
 from torch import __config__ as __config__
 from torch import __future__ as __future__
 from torch import profiler as profiler
+import torch
+import functools
+import warnings
+import collections
+try:
+    import numpy as np
+    HAS_NUMPY = True
+except ModuleNotFoundError:
+    HAS_NUMPY = False
+from torch._six import string_classes
 
 _C._init_names(list(torch._storage_classes))
 
@@ -751,3 +726,225 @@ from ._vmap_internals import vmap as vmap
 # class usage. We add these lines here to preserve backward compatibility.
 quantized_lstm = torch.ops.aten.quantized_lstm
 quantized_gru = torch.ops.aten.quantized_gru
+
+
+class autocast(object):
+    r"""
+    Instances of :class:`autocast` serve as context managers or decorators that
+    allow regions of your script to run in mixed precision.
+    In these regions, CUDA ops run in an op-specific dtype chosen by autocast
+    to improve performance while maintaining accuracy.
+    See the :ref:`Autocast Op Reference<autocast-op-reference>` for details.
+    When entering an autocast-enabled region, Tensors may be any type.
+    You should not call ``.half()`` on your model(s) or inputs when using autocasting.
+    :class:`autocast` should wrap only the forward pass(es) of your network, including the loss
+    computation(s).  Backward passes under autocast are not recommended.
+    Backward ops run in the same type that autocast used for corresponding forward ops.
+    Example::
+        # Creates model and optimizer in default precision
+        model = Net().cuda()
+        optimizer = optim.SGD(model.parameters(), ...)
+        for input, target in data:
+            optimizer.zero_grad()
+            # Enables autocasting for the forward pass (model + loss)
+            with autocast():
+                output = model(input)
+                loss = loss_fn(output, target)
+            # Exits the context manager before backward()
+            loss.backward()
+            optimizer.step()
+    See the :ref:`Automatic Mixed Precision examples<amp-examples>` for usage (along with gradient scaling)
+    in more complex scenarios (e.g., gradient penalty, multiple models/losses, custom autograd functions).
+    :class:`autocast` can also be used as a decorator, e.g., on the ``forward`` method of your model::
+        class AutocastModel(nn.Module):
+            ...
+            @autocast()
+            def forward(self, input):
+                ...
+    Floating-point Tensors produced in an autocast-enabled region may be ``float16``.
+    After returning to an autocast-disabled region, using them with floating-point
+    Tensors of different dtypes may cause type mismatch errors.  If so, cast the Tensor(s)
+    produced in the autocast region back to ``float32`` (or other dtype if desired).
+    If a Tensor from the autocast region is already ``float32``, the cast is a no-op,
+    and incurs no additional overhead.  Example::
+        # Creates some tensors in default dtype (here assumed to be float32)
+        a_float32 = torch.rand((8, 8), device="cuda")
+        b_float32 = torch.rand((8, 8), device="cuda")
+        c_float32 = torch.rand((8, 8), device="cuda")
+        d_float32 = torch.rand((8, 8), device="cuda")
+        with autocast():
+            # torch.mm is on autocast's list of ops that should run in float16.
+            # Inputs are float32, but the op runs in float16 and produces float16 output.
+            # No manual casts are required.
+            e_float16 = torch.mm(a_float32, b_float32)
+            # Also handles mixed input types
+            f_float16 = torch.mm(d_float32, e_float16)
+        # After exiting autocast, calls f_float16.float() to use with d_float32
+        g_float32 = torch.mm(d_float32, f_float16.float())
+    Type mismatch errors *in* an autocast-enabled region are a bug; if this is what you observe,
+    please file an issue.
+    ``autocast(enabled=False)`` subregions can be nested in autocast-enabled regions.
+    Locally disabling autocast can be useful, for example, if you want to force a subregion
+    to run in a particular ``dtype``.  Disabling autocast gives you explicit control over
+    the execution type.  In the subregion, inputs from the surrounding region
+    should be cast to ``dtype`` before use::
+        # Creates some tensors in default dtype (here assumed to be float32)
+        a_float32 = torch.rand((8, 8), device="cuda")
+        b_float32 = torch.rand((8, 8), device="cuda")
+        c_float32 = torch.rand((8, 8), device="cuda")
+        d_float32 = torch.rand((8, 8), device="cuda")
+        with autocast():
+            e_float16 = torch.mm(a_float32, b_float32)
+            with autocast(enabled=False):
+                # Calls e_float16.float() to ensure float32 execution
+                # (necessary because e_float16 was created in an autocasted region)
+                f_float32 = torch.mm(c_float32, e_float16.float())
+            # No manual casts are required when re-entering the autocast-enabled region.
+            # torch.mm again runs in float16 and produces float16 output, regardless of input types.
+            g_float16 = torch.mm(d_float32, f_float32)
+    The autocast state is thread-local.  If you want it enabled in a new thread, the context manager or decorator
+    must be invoked in that thread.  This affects :class:`torch.nn.DataParallel` and
+    :class:`torch.nn.parallel.DistributedDataParallel` when used with more than one GPU per process
+    (see :ref:`Working with Multiple GPUs<amp-multigpu>`).
+    Args:
+        enabled(bool, optional, default=True):  Whether autocasting should be enabled in the region.
+    """
+    def __init__(self, enabled=True, fast_dtype=torch.float16, device='cuda'):
+        self.device=device
+        if device=='cpu':
+            supported_dtype = [torch.bfloat16]
+            if fast_dtype not in supported_dtype :
+                warnings.warn("In CPU autocast, but the target dtype is not supported. Disable the autocast.")
+                warnings.warn("CPU Autocast only support dtype of torch.bfloat16 currently.")
+                enabled = False
+                fast_dtype = torch.bfloat16
+        self._enabled = enabled
+        self.fast_dtype=fast_dtype
+
+    def __enter__(self):
+        if self.device=='cpu':
+            self.prev = torch.is_autocast_cpu_enabled()
+            self.prev_fastdtype = torch.get_autocast_cpu_dtype()
+            torch.set_autocast_cpu_enabled(self._enabled)
+            torch.set_autocast_cpu_dtype(self.fast_dtype)
+            torch.autocast_increment_nesting()
+        else:
+            self.prev = torch.is_autocast_enabled()
+            self.prev_fastdtype = torch.get_autocast_gpu_dtype()
+            torch.set_autocast_gpu_dtype(self.fast_dtype)
+            torch.set_autocast_enabled(self._enabled)
+            torch.autocast_increment_nesting()
+
+    def __exit__(self, *args):
+        # Drop the cache when we exit to a nesting level that's outside any instance of autocast.
+        if self.device=='cpu':
+            if torch.autocast_decrement_nesting() == 0:
+                torch.clear_autocast_cache()
+            torch.set_autocast_cpu_enabled(self.prev)
+            torch.set_autocast_cpu_dtype(self.prev_fastdtype)
+        else:
+            if torch.autocast_decrement_nesting() == 0:
+                torch.clear_autocast_cache()
+            torch.set_autocast_enabled(self.prev)
+            torch.set_autocast_gpu_dtype(self.prev_fastdtype)
+        return False
+
+    def __call__(self, func):
+        @functools.wraps(func)
+        def decorate_autocast(*args, **kwargs):
+            with self:
+                return func(*args, **kwargs)
+        return decorate_autocast
+
+
+# Casts Tensors and containers of Tensors.  Special-cases passthroughs for strings and np.ndarrays, which
+# may be falsely detected as "Iterables."
+def _cast(value, dtype):
+    if isinstance(value, torch.Tensor):
+        is_eligible = (value.is_floating_point() and value.is_cuda and (value.dtype is not torch.float64))
+        return value.to(dtype) if is_eligible else value
+    elif isinstance(value, string_classes):
+        return value
+    elif HAS_NUMPY and isinstance(value, np.ndarray):
+        return value
+    elif isinstance(value, collections.abc.Mapping):
+        return {_cast(k, dtype): _cast(v, dtype) for k, v in value.items()}
+    elif isinstance(value, collections.abc.Iterable):
+        iterable = map(lambda v: _cast(v, dtype), value)
+        if isinstance(value, list) or isinstance(value, tuple):
+            return type(value)(iterable)
+        else:
+            return iterable
+    else:
+        return value
+
+
+# custom_fwd is a decorator that may or may not be used with arguments, following
+# https://github.com/dabeaz/python-cookbook/tree/master/src/9/defining_a_decorator_that_takes_an_optional_argument.
+# this works:
+#     @custom_fwd
+#     def forward(...):
+# this also works:
+#     @custom_fwd(cast_inputs=torch.float)
+#     def forward(...):
+# TODO:  when python 2 support is dropped, change the signature to
+# def custom_fwd(fwd=None, *, cast_inputs=None) with internal changes following the link above.
+def custom_fwd(fwd=None, **kwargs):
+    """
+    Helper decorator for ``forward`` methods of custom autograd functions (subclasses of
+    :class:`torch.autograd.Function`).  See the :ref:`example page<amp-custom-examples>` for more detail.
+    Args:
+        cast_inputs (:class:`torch.dtype` or None, optional, default=None):  If not ``None``,
+            when ``forward`` runs in an autocast-enabled region, casts incoming
+            floating-point CUDA Tensors to the target dtype (non-floating-point Tensors are not affected),
+            then executes ``forward`` with autocast disabled.
+            If ``None``, ``forward``'s internal ops execute with the current autocast state.
+    .. note::
+        If the decorated ``forward`` is called outside an autocast-enabled region,
+        :func:`custom_fwd<custom_fwd>` is a no-op and ``cast_inputs`` has no effect.
+    """
+    if fwd is None:
+        if len(kwargs) == 0:
+            cast_inputs = None
+        else:
+            assert len(kwargs) == 1
+            cast_inputs = kwargs["cast_inputs"]
+        return functools.partial(custom_fwd, cast_inputs=cast_inputs)
+
+    if len(kwargs) == 0:
+        cast_inputs = None
+    else:
+        assert len(kwargs) == 1
+        cast_inputs = kwargs["cast_inputs"]
+
+    @functools.wraps(fwd)
+    def decorate_fwd(*args, **kwargs):
+        if cast_inputs is None:
+            args[0]._fwd_used_autocast = torch.is_autocast_enabled()
+            return fwd(*args, **kwargs)
+        else:
+            autocast_context = torch.is_autocast_enabled()
+            args[0]._fwd_used_autocast = False
+            if autocast_context:
+                with autocast(enabled=False):
+                    return fwd(*_cast(args, cast_inputs), **_cast(kwargs, cast_inputs))
+            else:
+                return fwd(*args, **kwargs)
+    return decorate_fwd
+
+
+# Autograd ensures incoming gradients are the same type as forward outputs.  Allowing a separate
+# cast_inputs argument on custom_bwd is unnecessary and could cause errors if it doesn't match
+# cast_inputs supplied to custom_fwd.
+def custom_bwd(bwd):
+    """
+    Helper decorator for backward methods of custom autograd functions (subclasses of
+    :class:`torch.autograd.Function`).
+    Ensures that ``backward`` executes with the same autocast state as ``forward``.
+    See the :ref:`example page<amp-custom-examples>` for more detail.
+    """
+    @functools.wraps(bwd)
+    def decorate_bwd(*args, **kwargs):
+        with autocast(args[0]._fwd_used_autocast):
+            return bwd(*args, **kwargs)
+    return decorate_bwd

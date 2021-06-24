@@ -922,11 +922,7 @@ class TestBinaryUfuncs(TestCase):
                 a = torch.tensor(a, device=devices[0])
                 b = torch.tensor(b, device=devices[1])
 
-                if op in (operator.floordiv, torch.floor_divide):
-                    with self.assertWarnsOnceRegex(UserWarning, "floor_divide"):
-                        do_test(op, a, b)
-                else:
-                    do_test(op, a, b)
+            do_test(op, a, b)
 
     # This test ensures that a scalar Tensor can be safely used
     # in a binary operation in conjunction with a Tensor on all
@@ -1266,10 +1262,10 @@ class TestBinaryUfuncs(TestCase):
 
             if alias is not None:
                 alias_result = alias(a_tensor, b_tensor)
-                self.assertEqual(alias_result, tensor_result)
+                self.assertEqual(alias_result, tensor_result, exact_dtype=False)
 
-            self.assertEqual(tensor_result, numpy_result)
-            self.assertEqual(out, numpy_result)
+            self.assertEqual(tensor_result, numpy_result, exact_dtype=False)
+            self.assertEqual(out, numpy_result, exact_dtype=False)
 
     @dtypes(*(torch.testing.get_all_fp_dtypes()))
     def test_maximum_minimum_float_nan_and_inf(self, device, dtype):
@@ -1641,30 +1637,30 @@ class TestBinaryUfuncs(TestCase):
     @dtypes(*torch.testing.get_all_dtypes(include_bfloat16=False, include_bool=False, include_complex=False))
     def test_fmod_remainder(self, device, dtype):
         # Use numpy as reference
-        def _helper(x, mod):
-            fns_list = ((torch.fmod, torch.Tensor.fmod_, np.fmod),
-                        (torch.remainder, torch.Tensor.remainder_, np.remainder))
+        def _helper(x, mod, fns_list):
             for fn, inplace_fn, ref_fn in fns_list:
-                np_x = x.cpu().numpy()
+                np_x = x.cpu().numpy() if torch.is_tensor(x) else x
                 np_mod = mod.cpu().numpy() if torch.is_tensor(mod) else mod
                 exp = ref_fn(np_x, np_mod)
                 exp = torch.from_numpy(exp)
                 res = fn(x, mod)
 
                 self.assertEqual(res, exp, exact_dtype=False)
-                # out
-                out = torch.empty(0, device=device, dtype=res.dtype)
-                fn(x, mod, out=out)
-                self.assertEqual(out, exp, exact_dtype=False)
-                self.assertEqual(out.size(), torch.Size([10, 10]))
-                # in-place (Type cast runtime error)
-                try:
-                    inplace_fn(x, mod)
-                    self.assertEqual(x, exp, exact_dtype=False)
-                except RuntimeError as e:
-                    self.assertRegex(str(e), "result type (Half|Float|Double) "
-                                             "can't be cast to the desired output "
-                                             "type (Byte|Char|Short|Int|Long)")
+
+                if torch.is_tensor(x):
+                    # out
+                    out = torch.empty(0, device=device, dtype=res.dtype)
+                    fn(x, mod, out=out)
+                    self.assertEqual(out, exp, exact_dtype=False)
+                    self.assertEqual(out.size(), torch.Size([10, 10]))
+                    # in-place (Type cast runtime error)
+                    try:
+                        inplace_fn(x, mod)
+                        self.assertEqual(x, exp, exact_dtype=False)
+                    except RuntimeError as e:
+                        self.assertRegex(str(e), "result type (Half|Float|Double) "
+                                                 "can't be cast to the desired output "
+                                                 "type (Byte|Char|Short|Int|Long)")
 
         x = make_tensor((10, 10), device=device, dtype=dtype, low=-9, high=9)
         # mod with same dtype as x
@@ -1681,7 +1677,15 @@ class TestBinaryUfuncs(TestCase):
             mods.append(mod_float)
 
         for dividend, mod in product([x, x.t()], mods):
-            _helper(dividend, mod)
+            _helper(dividend, mod,
+                    ((torch.fmod, torch.Tensor.fmod_, np.fmod),
+                     (torch.remainder, torch.Tensor.remainder_, np.remainder),))
+
+        # Tests for torch.remainder(scalar, tensor)
+        for dividend, mod in product([5, 3.14], mods):
+            if torch.is_tensor(mod):
+                _helper(dividend, mod,
+                        ((torch.remainder, torch.Tensor.remainder_, np.remainder),))
 
     @dtypes(torch.float, torch.double)
     def test_remainder_fmod_large_dividend(self, device, dtype):
@@ -1717,7 +1721,7 @@ class TestBinaryUfuncs(TestCase):
                 expected = torch.sqrt(input[0] * input[0] + input[1] * input[1])
             else:
                 expected = np.hypot(input[0].cpu().numpy(), input[1].cpu().numpy())
-            self.assertEqual(actual, expected)
+            self.assertEqual(actual, expected, exact_dtype=False)
 
     @onlyOnCPUAndCUDA
     @dtypes(torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64)
@@ -1727,7 +1731,7 @@ class TestBinaryUfuncs(TestCase):
         t2 = torch.tensor([0, 0, 10], dtype=dtype, device=device)
         actual = torch.gcd(t1, t2)
         expected = np.gcd([0, 10, 0], [0, 0, 10])
-        self.assertEqual(actual, expected)
+        self.assertEqual(actual, expected, exact_dtype=False)
 
         if dtype == torch.uint8:
             # Test unsigned integers with potential sign issues (i.e., uint8 with value >= 128)
@@ -1735,6 +1739,7 @@ class TestBinaryUfuncs(TestCase):
             b = torch.tensor([190, 220], device=device, dtype=dtype)
             actual = torch.gcd(a, b)
             expected = torch.tensor([190, 10], device=device, dtype=dtype)
+            self.assertEqual(actual, expected)
         else:
             # Compares with NumPy
             a = torch.randint(-20, 20, (1024,), device=device, dtype=dtype)
@@ -1751,14 +1756,14 @@ class TestBinaryUfuncs(TestCase):
         t2 = torch.tensor([0, 0, 10], dtype=dtype, device=device)
         actual = torch.lcm(t1, t2)
         expected = np.lcm([0, 10, 0], [0, 0, 10])
-        self.assertEqual(actual, expected)
+        self.assertEqual(actual, expected, exact_dtype=False)
 
         # Compares with NumPy
         a = torch.randint(-20, 20, (1024,), device=device, dtype=dtype)
         b = torch.randint(-20, 20, (1024,), device=device, dtype=dtype)
         actual = torch.lcm(a, b)
         expected = np.lcm(a.cpu().numpy(), b.cpu().numpy())
-        self.assertEqual(actual, expected)
+        self.assertEqual(actual, expected, exact_dtype=False)
 
     @onlyOnCPUAndCUDA
     @dtypes(torch.float32, torch.float64)
@@ -2050,18 +2055,18 @@ class TestBinaryUfuncs(TestCase):
 
     @onlyCUDA
     def test_heaviside_cross_device(self, device):
-        x = torch.tensor([-9, 5, 0, 6, -2, 2], device='cuda')
+        x = torch.tensor([-9, 5, 0, 6, -2, 2], device=device)
         y = torch.tensor(0)
         result = torch.heaviside(x, y)
-        expect = torch.tensor([0, 1, 0, 1, 0, 1], device='cuda')
+        expect = torch.tensor([0, 1, 0, 1, 0, 1], device=device)
         self.assertEqual(result, expect)
 
         result = torch.heaviside(y, x)
-        expect = torch.tensor([-9, 5, 0, 6, -2, 2], device='cuda')
+        expect = torch.tensor([-9, 5, 0, 6, -2, 2], device=device)
         self.assertEqual(result, expect)
 
         x = torch.tensor([-9, 5, 0, 6, -2, 2])
-        y = torch.tensor(0, device='cuda')
+        y = torch.tensor(0, device=device)
         with self.assertRaisesRegex(RuntimeError, 'Expected all tensors to be on the same device'):
             torch.heaviside(x, y)
 
@@ -2351,6 +2356,12 @@ class TestBinaryUfuncs(TestCase):
         self.assertRaisesRegex(RuntimeError, r"result type ComplexFloat can't be cast to the desired output type Double",
                                lambda: torch.add(m1, m1, out=m2))
 
+    @onlyCUDA
+    def test_add_half_tensor_with_alpha(self, device):
+        x = torch.tensor([60000.0], dtype=torch.half, device=device)
+        y = torch.tensor([-60000.0], dtype=torch.half, device=device)
+        actual = torch.add(x, y, alpha=2)
+        self.assertTrue(not (actual.isnan() or actual.isinf()))
 
     def test_sub_typing(self, device):
         m1 = torch.tensor([True, False, False, True, False, False], dtype=torch.bool, device=device)
@@ -2480,14 +2491,14 @@ class TestBinaryUfuncs(TestCase):
             actual = torch.trapz(t, dx=dx, dim=dim)
             expected = np.trapz(t.cpu().numpy(), dx=dx, axis=dim)
             self.assertEqual(expected.shape, actual.shape)
-            self.assertEqual(expected, actual)
+            self.assertEqual(expected, actual, exact_dtype=False)
 
         def test_x(sizes, dim, x, device):
             t = torch.randn(sizes, device=device)
             actual = torch.trapz(t, x=torch.tensor(x, device=device), dim=dim)
             expected = np.trapz(t.cpu().numpy(), x=x, axis=dim)
             self.assertEqual(expected.shape, actual.shape)
-            self.assertEqual(expected, actual.cpu())
+            self.assertEqual(expected, actual.cpu(), exact_dtype=False)
 
         test_dx((2, 3, 4), 1, 1, device)
         test_dx((10, 2), 0, 0.1, device)
@@ -2765,17 +2776,21 @@ tensor_binary_ops = [
     '__add__', '__radd__', '__iadd__',
     '__sub__', '__rsub__', '__isub__',
     '__mul__', '__rmul__', '__imul__',
-    '__matmul__', '__rmatmul__', '__imatmul__',
+    '__matmul__', '__rmatmul__',
     '__truediv__', '__rtruediv__', '__itruediv__',
     '__floordiv__', '__rfloordiv__', '__ifloordiv__',
     '__mod__', '__rmod__', '__imod__',
-    '__divmod__', '__rdivmod__', '__idivmod__',
     '__pow__', '__rpow__', '__ipow__',
-    '__lshift__', '__rlshift__', '__ilshift__',
-    '__rshift__', '__rrshift__', '__irshift__',
-    '__and__', '__rand__', '__iand__',
-    '__xor__', '__rxor__', '__ixor__',
-    '__or__', '__ror__', '__ior__',
+    '__lshift__', '__ilshift__',
+    '__rshift__', '__irshift__',
+    '__and__', '__iand__',
+    '__xor__', '__ixor__',
+    '__or__', '__ior__',
+
+    # Unsupported operators
+    # '__imatmul__',
+    # '__divmod__', '__rdivmod__', '__idivmod__',
+    # '__rand__', '__ror__', '__rxor__', '__rlshift__', '__rrshift__',
 ]
 
 # Test that binary math operations return NotImplemented for unknown types.
@@ -2799,7 +2814,7 @@ def generate_not_implemented_tests(cls):
             return t.clamp(min=(_number(_div_min, 1, dtype)))
         return t
 
-    for op in tensor_binary_ops:
+    def create_test_func(op):
         @dtypes(*_types)
         def test(self, device, dtype):
             # Generate the inputs
@@ -2808,12 +2823,14 @@ def generate_not_implemented_tests(cls):
             # Runs the tensor op on the device
             result = getattr(tensor, op)(UnknownType())
             self.assertEqual(result, NotImplemented)
+        return test
 
+    for op in tensor_binary_ops:
         test_name = "test_{}_not_implemented".format(op)
         assert not hasattr(cls, test_name), "{0} already in {1}".format(
             test_name, cls.__name__)
 
-        setattr(cls, test_name, test)
+        setattr(cls, test_name, create_test_func(op))
 
 
 generate_not_implemented_tests(TestBinaryUfuncs)

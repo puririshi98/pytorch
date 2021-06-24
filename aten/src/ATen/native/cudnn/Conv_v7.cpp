@@ -2,6 +2,8 @@
 
 #if AT_CUDNN_ENABLED()
 
+#include <ATen/native/cudnn/Macros.h>
+
 #include <limits>
 #include <vector>
 #include <sstream>
@@ -614,6 +616,8 @@ if (args.params.dataType == CUDNN_DATA_FLOAT) {                                 
 //
 // ---------------------------------------------------------------------
 
+#if !HAS_CUDNN_V8()
+
 void raw_cudnn_convolution_forward_out_32bit(
     const Tensor& output, const Tensor& input, const Tensor& weight,
     IntArrayRef padding, IntArrayRef stride, IntArrayRef dilation, int64_t groups,
@@ -820,6 +824,8 @@ void raw_cudnn_convolution_backward_weight_out(
   // Considering the complexity of this issue, it is better not to use cuDNN for this case
   TORCH_INTERNAL_ASSERT(false, "This case should not be dispatched to cuDNN.");
 }
+
+#endif // !HAS_CUDNN_V8()
 
 void raw_cudnn_convolution_add_relu_out(
     const Tensor& output,
