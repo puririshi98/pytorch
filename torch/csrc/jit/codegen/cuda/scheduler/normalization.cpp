@@ -888,17 +888,18 @@ void schedulePersistentNormalization(
   scheduler_utils::parallelizeAllLike(
       reference_tv, scheduler_utils::allTvs(fusion));
 
-// Tensors that are consumers of the reduction operations. These are safe to
-// computeAt with.
+  // Tensors that are consumers of the reduction operations. These are safe to
+  // computeAt with.
 
-std::unordered_set<TensorView*> reduction_consumers;
-{
-  auto reduction_consumer_vals = DependencyCheck::getAllDependentVals(
-      {reduction_tvs.begin(), reduction_tvs.end()});
-  auto reduction_consumer_tvs = ir_utils::filterByType<TensorView>(reduction_consumer_vals);
-  reduction_consumers = std::unordered_set<TensorView*>(
-      reduction_consumer_tvs.begin(), reduction_consumer_tvs.end());
-}
+  std::unordered_set<TensorView*> reduction_consumers;
+  {
+    auto reduction_consumer_vals = DependencyCheck::getAllDependentVals(
+        {reduction_tvs.begin(), reduction_tvs.end()});
+    auto reduction_consumer_tvs =
+        ir_utils::filterByType<TensorView>(reduction_consumer_vals);
+    reduction_consumers = std::unordered_set<TensorView*>(
+        reduction_consumer_tvs.begin(), reduction_consumer_tvs.end());
+  }
 
   if (rparams.loop_unroll > 1) {
     // Schedule unrolling on inputs
@@ -923,13 +924,12 @@ std::unordered_set<TensorView*> reduction_consumers;
           std::inserter(reference_tvs, reference_tvs.end()),
           [](TensorView* tv) { return tv; });
     }
-    
-  
+
     for (auto cached_input : cached_inputs) {
       auto consumers_of_input_cache =
           scheduler_utils::consumerTvsOf(cached_input);
       for (auto consumer : consumers_of_input_cache) {
-        scheduler_utils::computeWithOutputs(
+        scheduler_utils::computeAtOutputs(
             consumer, -1, reduction_consumers, ComputeAtMode::MostInlined);
         cached_input->computeWith(
             consumer, unswitch_axis, ComputeAtMode::BestEffort);

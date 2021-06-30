@@ -75,19 +75,33 @@ class AllocateReuseModifier {
     }
 
     // Iterate over candidates to find match
-    for (auto tv : candidate_alias_tv_) {
-      const auto def = tv->definition();
+    for (auto out_tv : candidate_alias_tv_) {
+      const auto def = out_tv->definition();
       TORCH_INTERNAL_ASSERT(def != nullptr);
 
-      const auto alloc_it = map_tv_to_allocations_.find(tv->name());
+      const auto alloc_it = map_tv_to_allocations_.find(out_tv->name());
       TORCH_INTERNAL_ASSERT(alloc_it != map_tv_to_allocations_.end());
-      const auto output_alloc = alloc_it->second;
+      auto output_alloc = alloc_it->second;
 
-      const auto input_alloc = findCompatibleInputAllocate(
-          tv->dtype(), SymbolicSizePrinter::printSize(output_alloc), def);
+      auto input_alloc = findCompatibleInputAllocate(out_tv, output_alloc, def);
 
       if (input_alloc != nullptr) {
-        output_alloc->setAlias(input_alloc);
+        if (input_alloc->buffer()->isA<kir::TensorView>()) {
+          auto in_tv = input_alloc->buffer()->as<kir::TensorView>();
+          if (in_tv->fuserTv()->getComputeAtPosition() >
+              out_tv->fuserTv()->getComputeAtPosition()) {
+            // If we're allocating registers and output and input have a
+            // structure like: [TIDx, i0{5}] then of course we could alias
+            // buffers. However, if output_alloc compute at is 1 and input_alloc
+            // computeAt is 0, then the allocation of output_alloc will be
+            // before input_alloc. This isn't strictly safe in isolation in
+            // presence of complex loop nests, which is why we only traverse
+            // poitnwise operations that don't change number of root dimensions.
+            input_alloc->setAlias(output_alloc);
+          } else {
+            output_alloc->setAlias(input_alloc);
+          }
+        }
       }
     }
   }
@@ -107,29 +121,32 @@ class AllocateReuseModifier {
   }
 
   // Find an Input Allocate that is compatible with the Output Allocate
-  const kir::Allocate* findCompatibleInputAllocate(
-      const DataType output_dtype,
-      const std::string& output_size_str,
-      const kir::Expr* expr) {
+  kir::Allocate* findCompatibleInputAllocate(
+      const kir::TensorView* output_tv,
+      const kir::Allocate* output_alloc,
+      const kir::Expr* def) {
+    auto output_dtype = output_tv->dtype();
+    auto output_size_str = SymbolicSizePrinter::printSize(output_alloc);
+
     // Stop searching if current op is not point-wise
-    if (!isPointwiseTvOp(expr)) {
+    if (!isPointwiseTvOp(def)) {
       return nullptr;
     }
 
     const kir::TensorView* first_tv_input = nullptr;
-    for (const auto input : expr->inputs()) {
+    for (const auto input : def->inputs()) {
       if (auto input_tv = dynamic_cast<const kir::TensorView*>(input)) {
         if (first_tv_input == nullptr) {
           first_tv_input = input_tv;
         }
 
         // input_alloc == nullptr implies that input_tv is a kernel input
-        const auto input_alloc = map_tv_to_allocations_[input_tv->name()];
+        auto input_alloc = map_tv_to_allocations_[input_tv->name()];
         if (input_alloc != nullptr) {
           if (candidate_alias_tv_.find(input_tv) != candidate_alias_tv_.end() &&
               output_size_str == SymbolicSizePrinter::printSize(input_alloc) &&
               output_dtype == input_tv->dtype() &&
-              map_tv_to_last_usage_[input_tv] <= map_expr_to_pos_[expr]) {
+              map_tv_to_last_usage_[input_tv] <= map_expr_to_pos_[def]) {
             return input_alloc;
           }
         }
@@ -139,9 +156,9 @@ class AllocateReuseModifier {
     // Assume the first argument contains the primary variable
     // Follow path along point-wise operations
     if (first_tv_input != nullptr &&
-        map_tv_to_last_usage_[first_tv_input] <= map_expr_to_pos_[expr]) {
+        map_tv_to_last_usage_[first_tv_input] <= map_expr_to_pos_[def]) {
       if (const auto def = first_tv_input->definition()) {
-        return findCompatibleInputAllocate(output_dtype, output_size_str, def);
+        return findCompatibleInputAllocate(output_tv, output_alloc, def);
       }
     }
 
