@@ -199,7 +199,7 @@ void computeWithOutputs(
     TensorView* producer,
     int pos,
     std::unordered_set<TensorView*> tv_filter,
-    ComputeAtMode mode){
+    ComputeAtMode mode) {
   for (auto out_tv : outputTvsOf(producer)) {
     if (tv_filter.count(out_tv)) {
       producer->computeWith(out_tv, pos, mode);
@@ -211,7 +211,7 @@ void computeAtOutputs(
     TensorView* producer,
     int pos,
     std::unordered_set<TensorView*> tv_filter,
-    ComputeAtMode mode){
+    ComputeAtMode mode) {
   for (auto out_tv : outputTvsOf(producer)) {
     if (tv_filter.count(out_tv)) {
       producer->computeAt(out_tv, pos, mode);

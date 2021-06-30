@@ -79,7 +79,6 @@ void computeAtOutputs(
     int pos,
     ComputeAtMode mode = ComputeAtMode::Standard);
 
-
 // compute at outputs if they're present in the provided tv_filter
 void computeAtOutputs(
     TensorView* producer,

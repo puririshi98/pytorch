@@ -173,7 +173,7 @@ Val* unaryOp(UnaryOpType type, Val* v1) {
   Val* out = newValLike(v1, v1->getDataType().value());
   // If rand like, there isn't a real dependency on the input value, so map it
   // to a dummy scalar.
-  if(type == UnaryOpType::RandLike){
+  if (type == UnaryOpType::RandLike) {
     v1 = new NamedScalar("__rnd", v1->getDataType().value());
   }
 
