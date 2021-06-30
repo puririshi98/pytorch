@@ -67,6 +67,26 @@ void computeWithOutputs(
     int pos,
     ComputeAtMode mode = ComputeAtMode::Standard);
 
+// compute with outputs if they're present in the provided tv_filter
+void computeWithOutputs(
+    TensorView* producer,
+    int pos,
+    std::unordered_set<TensorView*> tv_filter,
+    ComputeAtMode mode = ComputeAtMode::Standard);
+
+void computeAtOutputs(
+    TensorView* producer,
+    int pos,
+    ComputeAtMode mode = ComputeAtMode::Standard);
+
+
+// compute at outputs if they're present in the provided tv_filter
+void computeAtOutputs(
+    TensorView* producer,
+    int pos,
+    std::unordered_set<TensorView*> tv_filter,
+    ComputeAtMode mode = ComputeAtMode::Standard);
+
 // returns all tensor views in fusion that are used between outputs and inputs.
 // Order is non-deterministic and non-repeating.
 // TODO: This would be good to have determinsitic and to put outside scheduling

@@ -650,9 +650,6 @@ void schedulePersistentNormalization(
   // Make sure we don't make a cache of an input that would turn it into a
   // persistent buffer. This gave invalid code.
   std::vector<TensorView*> cached_inputs;
-  // Inputs to post normalization section of the code. We don't want these
-  // tensors to computeWith their outputs as that could attempt to change them
-  std::unordered_set<TensorView*> post_norm_inputs;
   // If we're going to unroll, make a cache of the inputs
   if (rparams.loop_unroll > 1) {
     auto persistent_buffers =
@@ -671,9 +668,6 @@ void schedulePersistentNormalization(
     for (auto tv : in_tvs) {
       auto cached_tv = tv->cache_after();
       cached_inputs.emplace_back(cached_tv);
-      if (!inputs_to_reductions_set.count(tv)) {
-        post_norm_inputs.emplace(cached_tv);
-      }
     }
   }
 
@@ -849,15 +843,13 @@ void schedulePersistentNormalization(
         // unrolling
         reduction_tv->split(0, 1);
         // [x-BIDx, x-Unswitch, x-Unroll, x-TIDx, rF-Leftover, r-TIDy]
-        reduction_tv->reorder({{-2, 0}});
-        // [rF-Leftover, x-BIDx, x-Unswitch, x-Unroll, x-TIDx, r-TIDy]
-        rfactor_axes = {0};
+        rfactor_axes = {-2};
         rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
 
         rfactor_tv->axis(-1)->parallelize(ParallelType::TIDy);
-        rfactor_tv->axis(4)->parallelize(ParallelType::TIDx);
-        rfactor_tv->axis(2)->parallelize(ParallelType::Unswitch);
-        rfactor_tv->axis(1)->parallelize(ParallelType::BIDx);
+        rfactor_tv->axis(3)->parallelize(ParallelType::TIDx);
+        rfactor_tv->axis(1)->parallelize(ParallelType::Unswitch);
+        rfactor_tv->axis(0)->parallelize(ParallelType::BIDx);
       }
     } else {
       TORCH_INTERNAL_ASSERT(
@@ -896,6 +888,18 @@ void schedulePersistentNormalization(
   scheduler_utils::parallelizeAllLike(
       reference_tv, scheduler_utils::allTvs(fusion));
 
+// Tensors that are consumers of the reduction operations. These are safe to
+// computeAt with.
+
+std::unordered_set<TensorView*> reduction_consumers;
+{
+  auto reduction_consumer_vals = DependencyCheck::getAllDependentVals(
+      {reduction_tvs.begin(), reduction_tvs.end()});
+  auto reduction_consumer_tvs = ir_utils::filterByType<TensorView>(reduction_consumer_vals);
+  reduction_consumers = std::unordered_set<TensorView*>(
+      reduction_consumer_tvs.begin(), reduction_consumer_tvs.end());
+}
+
   if (rparams.loop_unroll > 1) {
     // Schedule unrolling on inputs
 
@@ -919,25 +923,16 @@ void schedulePersistentNormalization(
           std::inserter(reference_tvs, reference_tvs.end()),
           [](TensorView* tv) { return tv; });
     }
-
+    
+  
     for (auto cached_input : cached_inputs) {
-      if (!post_norm_inputs.count(cached_input)) {
-        auto consumers_of_input_cache =
-            scheduler_utils::consumerTvsOf(cached_input);
-        for (auto consumer : consumers_of_input_cache) {
-          scheduler_utils::computeWithOutputs(
-              consumer, -1, ComputeAtMode::MostInlined);
-          cached_input->computeAt(
-              consumer, unswitch_axis, ComputeAtMode::BestEffort);
-        }
-      } else {
-        auto tv_outputs = scheduler_utils::outputTvsOf(cached_input);
-        if (tv_outputs.empty()) {
-          // At the moment can have dummy inputs that aren't actually connected
-          // to the graph, just skip them.
-          continue;
-        }
-        cached_input->computeAt(tv_outputs[0], -1, ComputeAtMode::MostInlined);
+      auto consumers_of_input_cache =
+          scheduler_utils::consumerTvsOf(cached_input);
+      for (auto consumer : consumers_of_input_cache) {
+        scheduler_utils::computeWithOutputs(
+            consumer, -1, reduction_consumers, ComputeAtMode::MostInlined);
+        cached_input->computeWith(
+            consumer, unswitch_axis, ComputeAtMode::BestEffort);
       }
     }
 
@@ -947,13 +942,6 @@ void schedulePersistentNormalization(
          red_i++) {
       rfactor_tvs[red_i]->computeWith(
           reduction_tvs[red_i], -1, ComputeAtMode::BestEffort);
-    }
-
-    for (auto red_tv : reduction_tvs) {
-      // TODO: Should reduction also be best effort here? We already tried to
-      // inline based on input caches. Can we just remove this?
-      scheduler_utils::computeWithOutputs(
-          red_tv, -1, ComputeAtMode::BestEffort);
     }
 
     // Compute at should not remove parallelization scheme, but let's just make

@@ -479,7 +479,7 @@ struct FindOutputs : public IterVisitor {
 
   FindOutputs(const std::unordered_set<Val*>& _of) : of_(_of) {
     auto fusion = (*of_.begin())->fusion();
-    traverse(fusion);
+    traverseFrom(fusion, fusion->outputs(), true);
   };
 
   static std::unordered_set<Val*> getAllOutputsOf(
