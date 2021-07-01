@@ -51,46 +51,44 @@ std::vector<TensorView*> inputTvsOf(std::vector<TensorView*> tvs);
 // Returns consumers of tvs that are outputs of fusion
 std::vector<TensorView*> outputTvsOf(std::vector<TensorView*> tvs);
 
+// returns all tensor views in fusion that are used between outputs and inputs.
+// Order is non-deterministic and non-repeating.
+// TODO: This would be good to have determinsitic and to put outside scheduling
+// as it's generally useful
 TORCH_CUDA_CU_API std::vector<TensorView*> allTvs(Fusion* fusion);
 
 TORCH_CUDA_CU_API void parallelizeAllLike(
     TensorView* reference_tv,
     const std::vector<TensorView*>& all_tvs);
 
-void computeAtInputs(
+TORCH_CUDA_CU_API void computeAtInputs(
     TensorView* consumer,
     int pos,
     ComputeAtMode mode = ComputeAtMode::Standard);
 
-void computeWithOutputs(
+TORCH_CUDA_CU_API void computeWithOutputs(
     TensorView* producer,
     int pos,
     ComputeAtMode mode = ComputeAtMode::Standard);
 
 // compute with outputs if they're present in the provided tv_filter
-void computeWithOutputs(
+TORCH_CUDA_CU_API void computeWithOutputs(
     TensorView* producer,
     int pos,
     std::unordered_set<TensorView*> tv_filter,
     ComputeAtMode mode = ComputeAtMode::Standard);
 
-void computeAtOutputs(
+TORCH_CUDA_CU_API void computeAtOutputs(
     TensorView* producer,
     int pos,
     ComputeAtMode mode = ComputeAtMode::Standard);
 
 // compute at outputs if they're present in the provided tv_filter
-void computeAtOutputs(
+TORCH_CUDA_CU_API void computeAtOutputs(
     TensorView* producer,
     int pos,
     std::unordered_set<TensorView*> tv_filter,
     ComputeAtMode mode = ComputeAtMode::Standard);
-
-// returns all tensor views in fusion that are used between outputs and inputs.
-// Order is non-deterministic and non-repeating.
-// TODO: This would be good to have determinsitic and to put outside scheduling
-// as it's generally useful
-std::vector<TensorView*> allTvs(Fusion* fusion);
 
 struct PersistentBufferInfo {
   std::vector<TensorView*> buffers;
