@@ -318,9 +318,9 @@ unsigned int ComputeAt::backwardComputeAt_impl(
     producer->setDomain(new_domain);
     if (!producer->isFusionInput()) {
       producer->setComputeAt(replay_producer_pair.second);
-      consumer->setMaxProducer(consumer_compute_at_pos);
     }
 
+    consumer->setMaxProducer(consumer_compute_at_pos);
     root_map_.setAlias(current_domain, new_domain);
   }
 
@@ -379,9 +379,7 @@ unsigned int ComputeAt::forwardComputeAt_impl(
         " but that would invalidate previously compute at position or max producer position.");
 
     consumer->setDomain(new_domain);
-    if (!producer->isFusionInput()) {
-      consumer->setMaxProducer(replay_consumer_pair.second);
-    }
+    consumer->setMaxProducer(replay_consumer_pair.second);
     root_map_.setAlias(current_domain, new_domain);
   }
 
