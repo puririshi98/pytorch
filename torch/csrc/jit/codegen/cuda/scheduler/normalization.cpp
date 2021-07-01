@@ -186,7 +186,7 @@ ReductionParams innerNormalizationHeuristic(
 
     remainder_in_reduction = ceilDiv(num_elems_in_reduction, bdimx);
     unroll_factor = std::min(remainder_in_reduction, target_unroll);
-    if (unroll_factor == 1) {
+    if (unroll_factor == 1 && !persistence_required) {
       // If we can't unroll reduction dim, unroll output dim
       unroll_reduction = false;
       unroll_factor = std::min(remainder_in_output, target_unroll);
@@ -229,7 +229,8 @@ ReductionParams innerNormalizationHeuristic(
   rparams.fastest_dim = true;
   rparams.cross_block = true;
   rparams.cross_grid = false;
-  rparams.multiple_reds_per_blk = bdimy > 1;
+  rparams.multiple_reds_per_blk =
+      bdimy > 1 || (!unroll_reduction && unroll_factor);
   rparams.loop_unroll = unroll_factor;
   rparams.reduction_unroll = unroll_reduction;
   rparams.batches_per_block = batches_per_block;
@@ -347,7 +348,7 @@ ReductionParams OuterNormalizationHeuristic(
   int64_t bdimx = 1;
 
   // Should we unroll from reduction axis, or outs axis
-  bool unroll_reduction = false;
+  bool unroll_reduction = true;
 
   // Unroll amount
   int64_t unroll_factor = 1;
@@ -403,18 +404,25 @@ ReductionParams OuterNormalizationHeuristic(
 
     // Assume unroll in output, switch to remainder if cross grid
     // Don't unroll if we don't have 2 full waves
-    unroll_factor = std::min(
-        ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
-        target_unroll);
+    //
+    // For persistent kernels disable unrolling of iteration
+    // TODO: Check if reduction schedulers actually benefit from this, only
+    // considered persistent kernels which have difficulty inlining intermediate
+    // values so register space can blow up.
+    unroll_factor = persistence_required
+        ? 1
+        : std::min(
+              ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
+              target_unroll);
+    if (unroll_factor > 1) {
+      unroll_reduction = false;
+    }
 
     if (unroll_factor == 1 && remainder_in_reduction > 1) {
       // Try unrolling in reduction dimension
       unroll_factor = std::min(remainder_in_reduction, unroll_factor);
       // remainder_in_reduction = ceilDiv(remainder_in_reduction,
       // unroll_factor); Unused, comment for clang tidy.
-      if (unroll_factor > 1) {
-        unroll_reduction = true;
-      }
     }
     //  else {
     // remainder_in_output =
@@ -450,12 +458,12 @@ ReductionParams OuterNormalizationHeuristic(
       : batches_per_block + (kEight - batches_per_block % kEight);
 
   batches_per_block = std::min(round_up_8, round_up_pow2);
-
   ReductionParams rparams;
   rparams.fastest_dim = false;
   rparams.cross_block = true;
   rparams.cross_grid = false;
-  rparams.multiple_reds_per_blk = bdimx > 1;
+  rparams.multiple_reds_per_blk =
+      bdimx > 1 || (!unroll_reduction && unroll_factor);
   rparams.loop_unroll = unroll_factor;
   rparams.reduction_unroll = unroll_reduction;
   rparams.batches_per_block = batches_per_block;
@@ -904,15 +912,6 @@ void schedulePersistentNormalization(
   if (rparams.loop_unroll > 1) {
     // Schedule unrolling on inputs
 
-    // Find unswitch position
-    int unswitch_axis = -1;
-    for (int i = 0; i < (int)reference_tv->nDims(); i++) {
-      if (reference_tv->axis(i)->getParallelType() == ParallelType::Unswitch) {
-        unswitch_axis = i;
-      }
-    }
-    unswitch_axis++;
-
     // Input to cached we want outside unswitched position
     // Cached input to rfactor we want inlined
     std::unordered_set<TensorView*> reference_tvs;
@@ -931,8 +930,19 @@ void schedulePersistentNormalization(
       for (auto consumer : consumers_of_input_cache) {
         scheduler_utils::computeAtOutputs(
             consumer, -1, reduction_consumers, ComputeAtMode::MostInlined);
-        cached_input->computeWith(
-            consumer, unswitch_axis, ComputeAtMode::BestEffort);
+        auto unswitch_it = std::find_if(
+            consumer->domain()->domain().begin(),
+            consumer->domain()->domain().end(),
+            [](IterDomain* id) {
+              return id->getParallelType() == ParallelType::Unswitch;
+            });
+        auto unswitch_pos = unswitch_it == consumer->domain()->domain().end()
+            ? -1
+            : std::distance(consumer->domain()->domain().begin(), unswitch_it) +
+                1;
+                
+        cached_input->computeAt(
+            consumer, unswitch_pos, ComputeAtMode::BestEffort);
       }
     }
 
