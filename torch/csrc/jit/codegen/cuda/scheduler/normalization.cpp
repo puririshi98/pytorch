@@ -940,7 +940,7 @@ void schedulePersistentNormalization(
             ? -1
             : std::distance(consumer->domain()->domain().begin(), unswitch_it) +
                 1;
-                
+
         cached_input->computeAt(
             consumer, unswitch_pos, ComputeAtMode::BestEffort);
       }
