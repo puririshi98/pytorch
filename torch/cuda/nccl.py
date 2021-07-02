@@ -53,6 +53,20 @@ def all_reduce(inputs, outputs=None, op=SUM, streams=None, comms=None):
     if outputs is None:
         outputs = inputs
     _check_sequence_type(outputs)
+    print("Running all reduce")
+    try:
+        print("inputs shape:",inputs.size())
+    except:
+        print("inputs to all reduce not a tensor")
+    print('inputs:', inputs)
+    try:
+        print("outputs shape:",outputs.size())
+    except:
+        print("inputs to all reduce not a tensor")
+        print("outputs:",outputs)
+    print("op:",op)
+    print("streams:",streams)
+    print("comms:",comms)
     torch._C._nccl_all_reduce(inputs, outputs, op, streams, comms)
 
 
