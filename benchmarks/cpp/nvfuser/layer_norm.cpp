@@ -16,55 +16,62 @@ using namespace torch::jit::fuser::cuda;
 
 //------------------------------------------------------------------------------
 
-static void LayerNorm(benchmark::State& benchmark_state) {
-  Fusion fusion;
-  FusionGuard fg(&fusion);
+static void setupLayerNorm(Fusion* fusion, DataType dtype) {
+  FusionGuard fg(fusion);
 
-  std::vector<int64_t> input_shape{656, benchmark_state.range(0)};
   const int kReductionAxis = 1;
   const float kEps = 1e-5;
 
-  std::vector<int64_t> norm_shape;
-  for (int idx = kReductionAxis; idx < input_shape.size(); ++idx) {
-    norm_shape.push_back(input_shape[idx]);
-  }
   Double* eps_ptr = new Double(kEps);
 
   // setup fusion
-  auto input = TensorViewBuilder()
-                   .ndims(input_shape.size())
-                   .dtype(DataType::Float)
-                   .build();
-  fusion.addInput(input);
-  auto layer_norm_results =
-      layer_norm(input, norm_shape, nullptr, nullptr, eps_ptr);
-  fusion.addOutput(layer_norm_results.output);
+  auto input = TensorViewBuilder().ndims(2).dtype(dtype).build();
+  fusion->addInput(input);
+  auto layer_norm_results = layer_norm(input, 1, nullptr, nullptr, eps_ptr);
+  fusion->addOutput(layer_norm_results.output);
+}
+
+static void nvFuserScheduler_LayerNorm(
+    benchmark::State& benchmark_state,
+    FusionExecutorCache* fusion_executor_cache,
+    DataType dtype) {
+  std::vector<int64_t> input_shape{656, benchmark_state.range(0)};
+  const float kEps = 1e-5;
 
   // inputs
   at::manual_seed(0);
-  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+  auto options =
+      at::TensorOptions().dtype(data_type_to_aten(dtype)).device(at::kCUDA, 0);
   at::Tensor at_x = at::randn(input_shape, options);
-  std::vector<c10::IValue> inputs({at_x});
+  std::vector<c10::IValue> aten_inputs({at_x});
+  fusion_executor_cache->profile(true);
+  fusion_executor_cache->runFusionWithInputs(aten_inputs);
 
-  // outputs
-  std::vector<at::Tensor> outputs;
+  auto compile_log = fusion_executor_cache->getMostRecentExecutorInfo();
+  auto executor_instance = compile_log.fusion_executor;
+  TORCH_INTERNAL_ASSERT(compile_log.reduction_params.has_value());
+  TORCH_INTERNAL_ASSERT(compile_log.launch_constraints.has_value());
+  auto rparams = toString(compile_log.reduction_params.value());
+  auto lparams = toString(compile_log.launch_constraints.value());
 
-  auto reduction_params = getNormalizationHeuristics(&fusion, inputs);
-  TORCH_CHECK(reduction_params, "Reduction schedule was not generated!");
+  benchmark_state.SetLabel(rparams + lparams);
 
-  scheduleNormalization(&fusion, reduction_params.value());
-
-  FusionExecutor executor;
-  executor.setMeasureKernelTimeFlag(true);
-  executor.compileFusion(&fusion);
-
+  fusion_executor_cache->profile(false);
+  executor_instance->setMeasureKernelTimeFlag(true);
+  // Sync everything up before we start
   cudaDeviceSynchronize();
   for (auto _ : benchmark_state) {
-    outputs = executor.runFusion(
-        c10::ArrayRef<c10::IValue>(inputs), reduction_params.value().lparams);
-    benchmark_state.SetIterationTime(executor.kernelTimeMs() / 1000.0);
-    cudaDeviceSynchronize();
+    auto cg_outputs = fusion_executor_cache->runFusionWithInputs(aten_inputs);
+    benchmark_state.SetIterationTime(
+        executor_instance->kernelTimeMs() / 1000.0);
   }
+  // Sync everything up before we're finished, don't want to run ahead on the
+  // cpu while benchmarking.
+  cudaDeviceSynchronize();
+
+  benchmark_state.SetBytesProcessed(
+      int64_t(benchmark_state.iterations()) * 2 * at_x.numel() *
+      int64_t(dataTypeSize(dtype)));
 }
 
 static void LayerNorm_Baseline(benchmark::State& benchmark_state) {
@@ -89,7 +96,13 @@ static void LayerNorm_Baseline(benchmark::State& benchmark_state) {
   }
 }
 
-BENCHMARK(LayerNorm)
+NVFUSER_BENCHMARK_DEFINE(
+    nvFuserScheduler_fp32_LayerNorm,
+    setupLayerNorm,
+    nvFuserScheduler_LayerNorm,
+    DataType::Float);
+
+NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_LayerNorm)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
