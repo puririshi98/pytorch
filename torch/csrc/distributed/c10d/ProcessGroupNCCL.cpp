@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <tuple>
 #include <unordered_set>
+#include <iostream>
 
 #include <THC/THC.h>
 
@@ -1306,7 +1307,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::allreduce(
     std::vector<at::Tensor>& tensors,
     const AllreduceOptions& opts) {
   check_gpu_tensors(tensors);
-
+  std::cout << "All Reduce in C";
   // @lint-ignore CLANGTIDY
   auto tensor = tensors.back();
   RECORD_PARAM_COMMS(
