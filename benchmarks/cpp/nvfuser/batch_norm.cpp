@@ -17,23 +17,33 @@ using namespace torch::jit::fuser::cuda;
 //------------------------------------------------------------------------------
 
 static void setupBatchNorm(Fusion* fusion, DataType dtype) {
+  TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
+
   FusionGuard fg(fusion);
 
   const bool kTraining = true;
   const float kMomentum = 0.1;
   const float kEps = 1e-5;
 
-  // setup fusion
+      // setup fusion
   auto input = TensorViewBuilder().ndims(4).dtype(dtype).build();
   auto weight = TensorViewBuilder().ndims(1).dtype(dtype).build();
   auto bias = TensorViewBuilder().ndims(1).dtype(dtype).build();
-  auto running_mean = TensorViewBuilder().ndims(1).dtype(dtype).build();
-  auto running_var = TensorViewBuilder().ndims(1).dtype(dtype).build();
+  auto running_mean =
+      TensorViewBuilder().ndims(1).dtype(DataType::Float).build();
+  auto running_var =
+      TensorViewBuilder().ndims(1).dtype(DataType::Float).build();
   fusion->addInput(input);
   fusion->addInput(weight);
   fusion->addInput(bias);
   fusion->addInput(running_mean);
   fusion->addInput(running_var);
+
+  if (dtype == DataType::Half) {
+    input = castOp(DataType::Float, input);
+    weight = castOp(DataType::Float, weight);
+    bias = castOp(DataType::Float, bias);
+  }
 
   auto momentum_ptr = new Double(kMomentum);
   auto eps_ptr = new Double(kEps);
@@ -48,13 +58,21 @@ static void setupBatchNorm(Fusion* fusion, DataType dtype) {
       momentum_ptr,
       eps_ptr);
 
-  fusion->addOutput(result.output);
+  auto output = result.output;
+
+  if (dtype == DataType::Half) {
+    output = castOp(DataType::Half, output);
+  }
+
+  fusion->addOutput(output);
 }
 
 static void nvFuserScheduler_BatchNorm(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype) {
+  TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
+
   const bool kTraining = true;
   const float kMomentum = 0.1;
   const float kEps = 1e-5;
@@ -69,11 +87,13 @@ static void nvFuserScheduler_BatchNorm(
   at::manual_seed(0);
   auto options =
       at::TensorOptions().dtype(data_type_to_aten(dtype)).device(at::kCUDA, 0);
+  auto fp32_options =
+      at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
   at::Tensor at_x = at::randn(input_shape, options);
   at::Tensor at_weight = at::ones({input_shape[1]}, options);
   at::Tensor at_bias = at::zeros({input_shape[1]}, options);
-  at::Tensor at_run_mean = at::zeros({input_shape[1]}, options);
-  at::Tensor at_run_var = at::ones({input_shape[1]}, options);
+  at::Tensor at_run_mean = at::zeros({input_shape[1]}, fp32_options);
+  at::Tensor at_run_var = at::ones({input_shape[1]}, fp32_options);
   std::vector<c10::IValue> aten_inputs(
       {at_x, at_weight, at_bias, at_run_mean, at_run_var});
 
@@ -103,13 +123,19 @@ static void nvFuserScheduler_BatchNorm(
   cudaDeviceSynchronize();
 
   benchmark_state.SetBytesProcessed(
-      int64_t(benchmark_state.iterations()) *
-      (2 * 32 * benchmark_state.range(0) * benchmark_state.range(1) *
-       benchmark_state.range(1)) *
-      int64_t(dataTypeSize(dtype)));
+      (int64_t(benchmark_state.iterations()) *
+       (2 * at_x.numel() + 2 * at_weight.numel()) *
+       int64_t(dataTypeSize(dtype))) +
+      (2 * at_weight.numel() * int64_t(dataTypeSize(DataType::Float))));
 }
 
-static void BatchNorm_Baseline(benchmark::State& benchmark_state) {
+//------------------------------------------------------------------------------
+
+static void BatchNorm_Baseline(
+    benchmark::State& benchmark_state,
+    DataType dtype) {
+  TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
+
   const float kMomentum = 0.1;
   const float kEps = 1e-5;
   std::vector<int64_t> input_shape{
@@ -120,12 +146,15 @@ static void BatchNorm_Baseline(benchmark::State& benchmark_state) {
 
   // inputs
   at::manual_seed(0);
-  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+  auto options =
+      at::TensorOptions().dtype(data_type_to_aten(dtype)).device(at::kCUDA, 0);
+  auto fp32_options =
+      at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
   at::Tensor at_x = at::randn(input_shape, options);
   at::Tensor at_weight = at::ones({input_shape[1]}, options);
   at::Tensor at_bias = at::zeros({input_shape[1]}, options);
-  at::Tensor at_mean = at::zeros({input_shape[1]}, options);
-  at::Tensor at_var = at::ones({input_shape[1]}, options);
+  at::Tensor at_mean = at::zeros({input_shape[1]}, fp32_options);
+  at::Tensor at_var = at::ones({input_shape[1]}, fp32_options);
 
   auto ato_weight = c10::optional<at::Tensor>(at_weight);
   auto ato_bias = c10::optional<at::Tensor>(at_bias);
@@ -149,7 +178,25 @@ static void BatchNorm_Baseline(benchmark::State& benchmark_state) {
     benchmark_state.SetIterationTime(timer.elapsed() / 1000.0);
     cudaDeviceSynchronize();
   }
+
+  benchmark_state.SetBytesProcessed(
+      (int64_t(benchmark_state.iterations()) *
+       (2 * at_x.numel() + 2 * at_weight.numel()) *
+       int64_t(dataTypeSize(dtype))) +
+      (2 * at_weight.numel() * int64_t(dataTypeSize(DataType::Float))));
 }
+
+//------------------------------------------------------------------------------
+
+static void BatchNorm_Baseline_fp32(benchmark::State& benchmark_state) {
+  BatchNorm_Baseline(benchmark_state, DataType::Float);
+}
+
+static void BatchNorm_Baseline_fp16(benchmark::State& benchmark_state) {
+  BatchNorm_Baseline(benchmark_state, DataType::Half);
+}
+
+//------------------------------------------------------------------------------
 
 NVFUSER_BENCHMARK_DEFINE(
     nvFuserScheduler_fp32_BatchNorm,
@@ -163,7 +210,27 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_BatchNorm)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(BatchNorm_Baseline)
+NVFUSER_BENCHMARK_DEFINE(
+    nvFuserScheduler_fp16_BatchNorm,
+    setupBatchNorm,
+    nvFuserScheduler_BatchNorm,
+    DataType::Half);
+
+NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_BatchNorm)
+    ->RangeMultiplier(2)
+    ->Ranges({{64, 512}, {8, 32}})
+    ->Unit(benchmark::kMicrosecond)
+    ->UseManualTime();
+
+//------------------------------------------------------------------------------
+
+BENCHMARK(BatchNorm_Baseline_fp32)
+    ->RangeMultiplier(2)
+    ->Ranges({{64, 512}, {8, 32}})
+    ->Unit(benchmark::kMicrosecond)
+    ->UseManualTime();
+
+BENCHMARK(BatchNorm_Baseline_fp16)
     ->RangeMultiplier(2)
     ->Ranges({{64, 512}, {8, 32}})
     ->Unit(benchmark::kMicrosecond)

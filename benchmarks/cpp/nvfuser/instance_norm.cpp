@@ -14,9 +14,11 @@
 using namespace torch::jit::fuser::cuda;
 
 static void setupInstanceNorm(Fusion* fusion, DataType dtype) {
+  TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
+
   FusionGuard fg(fusion);
 
-  auto x = TensorViewBuilder().ndims(4).dtype(dtype).build();
+  auto input = TensorViewBuilder().ndims(4).dtype(dtype).build();
   auto weight = TensorViewBuilder().ndims(1).dtype(dtype).build();
   auto bias = TensorViewBuilder().ndims(1).dtype(dtype).build();
   auto running_mean =
@@ -24,11 +26,17 @@ static void setupInstanceNorm(Fusion* fusion, DataType dtype) {
   auto running_var =
       TensorViewBuilder().ndims(1).dtype(DataType::Float).build();
 
-  fusion->addInput(x);
+  fusion->addInput(input);
   fusion->addInput(weight);
   fusion->addInput(bias);
   fusion->addInput(running_mean);
   fusion->addInput(running_var);
+
+  if (dtype == DataType::Half) {
+    input = castOp(DataType::Float, input);
+    weight = castOp(DataType::Float, weight);
+    bias = castOp(DataType::Float, bias);
+  }
 
   const bool kTraining = true;
   const float kMomentum = 0.1;
@@ -37,7 +45,7 @@ static void setupInstanceNorm(Fusion* fusion, DataType dtype) {
   auto eps_ptr = new Double(kEps);
 
   auto norm = instance_norm(
-      x,
+      input,
       weight,
       bias,
       running_mean,
@@ -45,9 +53,14 @@ static void setupInstanceNorm(Fusion* fusion, DataType dtype) {
       kTraining,
       momentum_ptr,
       eps_ptr);
-  auto norm_relu = unaryOp(UnaryOpType::Relu, norm.output);
 
-  fusion->addOutput(norm_relu);
+  auto output = unaryOp(UnaryOpType::Relu, norm.output);
+
+  if (dtype == DataType::Half) {
+    output = castOp(DataType::Half, output);
+  }
+
+  fusion->addOutput(output);
 }
 
 //------------------------------------------------------------------------------
@@ -56,12 +69,13 @@ static void nvFuserScheduler_InstanceNorm(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype) {
+  TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
+
   std::vector<int64_t> input_shape{
       benchmark_state.range(0),
       benchmark_state.range(2),
       benchmark_state.range(1),
       benchmark_state.range(1)};
-  const auto aten_dtype = data_type_to_aten(dtype);
 
   // inputs
   at::manual_seed(0);
@@ -118,6 +132,8 @@ static void nvFuserScheduler_InstanceNorm(
 static void InstanceNorm_Baseline(
     benchmark::State& benchmark_state,
     DataType dtype) {
+  TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
+
   std::vector<int64_t> input_shape{
       benchmark_state.range(0),
       benchmark_state.range(2),
@@ -199,6 +215,17 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_InstanceNorm)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
+NVFUSER_BENCHMARK_DEFINE(
+    nvFuserScheduler_fp16_InstanceNorm,
+    setupInstanceNorm,
+    nvFuserScheduler_InstanceNorm,
+    DataType::Half);
+
+NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_InstanceNorm)
+    ->RangeMultiplier(2)
+    ->Ranges({{8, 8}, {640, 640}, {64, 256}})
+    ->Unit(benchmark::kMicrosecond)
+    ->UseManualTime();
 //------------------------------------------------------------------------------
 
 BENCHMARK(InstanceNorm_Baseline_fp32)
