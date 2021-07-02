@@ -88,8 +88,15 @@ class AllocateReuseModifier {
       if (input_alloc != nullptr) {
         if (input_alloc->buffer()->isA<kir::TensorView>()) {
           auto in_tv = input_alloc->buffer()->as<kir::TensorView>();
-          if (in_tv->fuserTv()->getComputeAtPosition() >
-              out_tv->fuserTv()->getComputeAtPosition()) {
+          TORCH_INTERNAL_ASSERT(
+              allocation_to_loop_depth_.find(input_alloc) !=
+                      allocation_to_loop_depth_.end() ||
+                  allocation_to_loop_depth_.find(output_alloc) !=
+                      allocation_to_loop_depth_.end(),
+              "Did not set loop depth for alias analysis of allocations.");
+
+          if (allocation_to_loop_depth_.at(input_alloc) >
+              allocation_to_loop_depth_.at(output_alloc)) {
             // If we're allocating registers and output and input have a
             // structure like: [TIDx, i0{5}] then of course we could alias
             // buffers. However, if output_alloc compute at is 1 and input_alloc
@@ -210,13 +217,16 @@ class AllocateReuseModifier {
   void handle(kir::Allocate* allocate) {
     if (auto tv = dynamic_cast<const kir::TensorView*>(allocate->buffer())) {
       map_tv_to_allocations_[tv->name()] = allocate;
+      allocation_to_loop_depth_[allocate] = loop_depth_;
     }
   }
 
   void handle(const kir::ForLoop* for_loop) {
+    loop_depth_++;
     for (auto expr : for_loop->body().exprs()) {
       handle(expr);
     }
+    loop_depth_--;
   }
 
   void handle(const kir::IfThenElse* ite) {
@@ -242,9 +252,19 @@ class AllocateReuseModifier {
   // Map TensorView name to Allocate node
   std::unordered_map<StmtNameType, kir::Allocate*> map_tv_to_allocations_;
 
+  // Check how nested an allocation is, this helps determine the ordering of
+  // allocation definitions for aliasing. If we have tv0 and tv1 in order that
+  // are detected to be aliased with eachother, if tv1 is in a loop containing
+  // tv0 because tv1's computeAt is lower than tv0's then we want to reverse the
+  // aliasing. Because of unswitch we can't just use the computeAt of the
+  // tensors in the buffers.
+  std::unordered_map<kir::Allocate*, int> allocation_to_loop_depth_;
+
   // Track candidate TensorViews whose Allocate nodes
   // could potentially alias another Allocate node
   std::unordered_set<const kir::TensorView*> candidate_alias_tv_;
+
+  int loop_depth_ = 0;
 };
 
 } // namespace
