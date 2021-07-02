@@ -61,13 +61,18 @@ static void nvFuserScheduler_Softmax(
   fusion_executor_cache->runFusionWithInputs({aten_input});
 
   auto compile_log = fusion_executor_cache->getMostRecentExecutorInfo();
+  bool segmented =
+      fusion_executor_cache->getMostRecentKernelRuntime()->isSegmented();
+
   auto executor_instance = compile_log.fusion_executor;
   TORCH_INTERNAL_ASSERT(compile_log.reduction_params.has_value());
   TORCH_INTERNAL_ASSERT(compile_log.launch_constraints.has_value());
   auto rparams = toString(compile_log.reduction_params.value());
   auto lparams = toString(compile_log.launch_constraints.value());
 
-  benchmark_state.SetLabel(rparams + lparams);
+  if (!segmented) {
+    benchmark_state.SetLabel(rparams + lparams);
+  }
 
   fusion_executor_cache->profile(false);
   executor_instance->setMeasureKernelTimeFlag(true);
@@ -75,8 +80,10 @@ static void nvFuserScheduler_Softmax(
   cudaDeviceSynchronize();
   for (auto _ : benchmark_state) {
     auto cg_outputs = fusion_executor_cache->runFusionWithInputs({aten_input});
-    benchmark_state.SetIterationTime(
-        executor_instance->kernelTimeMs() / 1000.0);
+    if (!segmented) {
+      benchmark_state.SetIterationTime(
+          executor_instance->kernelTimeMs() / 1000.0);
+    }
   }
   // Sync everything up before we're finished, don't want to run ahead on the
   // cpu while benchmarking.
@@ -210,13 +217,18 @@ static void nvFuserScheduler_SoftmaxDropout(
   fusion_executor_cache->runFusionWithInputs(aten_inputs);
 
   auto compile_log = fusion_executor_cache->getMostRecentExecutorInfo();
+  bool segmented =
+      fusion_executor_cache->getMostRecentKernelRuntime()->isSegmented();
+
   auto executor_instance = compile_log.fusion_executor;
   TORCH_INTERNAL_ASSERT(compile_log.reduction_params.has_value());
   TORCH_INTERNAL_ASSERT(compile_log.launch_constraints.has_value());
   auto rparams = toString(compile_log.reduction_params.value());
   auto lparams = toString(compile_log.launch_constraints.value());
 
-  benchmark_state.SetLabel(rparams + lparams);
+  if (!segmented) {
+    benchmark_state.SetLabel(rparams + lparams);
+  }
 
   fusion_executor_cache->profile(false);
   executor_instance->setMeasureKernelTimeFlag(true);
@@ -224,8 +236,10 @@ static void nvFuserScheduler_SoftmaxDropout(
   cudaDeviceSynchronize();
   for (auto _ : benchmark_state) {
     auto cg_outputs = fusion_executor_cache->runFusionWithInputs(aten_inputs);
-    benchmark_state.SetIterationTime(
-        executor_instance->kernelTimeMs() / 1000.0);
+    if (!segmented) {
+      benchmark_state.SetIterationTime(
+          executor_instance->kernelTimeMs() / 1000.0);
+    }
   }
   // Sync everything up before we're finished, don't want to run ahead on the
   // cpu while benchmarking.
