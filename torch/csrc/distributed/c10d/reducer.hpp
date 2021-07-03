@@ -23,7 +23,7 @@
 
 namespace c10d {
 
-constexpr int kDefaultFirstBucketBytes = int(1024*1024 * 1024);
+int kDefaultFirstBucketBytes = int(1024*1024 * 1024);
 constexpr int kDefaultBucketBytesCap = int(1024 * 1024 * 1024);
 // Collect runtime stats once for every kDDPRuntimeLoggingSampleRate iterations.
 constexpr int kDDPRuntimeLoggingSampleRate = 100;
