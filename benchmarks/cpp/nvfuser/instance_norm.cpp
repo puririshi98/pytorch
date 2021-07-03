@@ -65,7 +65,7 @@ static void setupInstanceNorm(Fusion* fusion, DataType dtype) {
 
 //------------------------------------------------------------------------------
 
-static void nvFuserScheduler_InstanceNorm(
+static void NvFuserScheduler_InstanceNorm(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype) {
@@ -107,7 +107,7 @@ static void nvFuserScheduler_InstanceNorm(
        (kChannels * 2) * dataTypeSize(DataType::Float)));
 }
 
-static void InstanceNorm_Baseline(
+static void Baseline_InstanceNorm(
     benchmark::State& benchmark_state,
     DataType dtype) {
   TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
@@ -171,12 +171,12 @@ static void InstanceNorm_Baseline(
 
 //------------------------------------------------------------------------------
 
-static void InstanceNorm_Baseline_fp32(benchmark::State& benchmark_state) {
-  InstanceNorm_Baseline(benchmark_state, DataType::Float);
+static void Baseline_InstanceNorm_fp32(benchmark::State& benchmark_state) {
+  Baseline_InstanceNorm(benchmark_state, DataType::Float);
 }
 
-static void InstanceNorm_Baseline_fp16(benchmark::State& benchmark_state) {
-  InstanceNorm_Baseline(benchmark_state, DataType::Half);
+static void Baseline_InstanceNorm_fp16(benchmark::State& benchmark_state) {
+  Baseline_InstanceNorm(benchmark_state, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
@@ -206,13 +206,13 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_InstanceNorm)
     ->UseManualTime();
 //------------------------------------------------------------------------------
 
-BENCHMARK(InstanceNorm_Baseline_fp32)
+BENCHMARK(Baseline_InstanceNorm_fp32)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8}, {640, 640}, {64, 256}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(InstanceNorm_Baseline_fp16)
+BENCHMARK(Baseline_InstanceNorm_fp16)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8}, {640, 640}, {64, 256}})
     ->Unit(benchmark::kMicrosecond)

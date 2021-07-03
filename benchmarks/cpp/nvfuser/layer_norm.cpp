@@ -51,7 +51,7 @@ static void setupLayerNorm(Fusion* fusion, DataType dtype) {
   fusion->addOutput(output);
 }
 
-static void nvFuserScheduler_LayerNorm(
+static void NvFuserScheduler_LayerNorm(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype) {
@@ -79,7 +79,7 @@ static void nvFuserScheduler_LayerNorm(
 
 //------------------------------------------------------------------------------
 
-static void LayerNorm_Baseline(
+static void Baseline_LayerNorm(
     benchmark::State& benchmark_state,
     DataType dtype) {
   TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
@@ -108,35 +108,35 @@ static void LayerNorm_Baseline(
   }
 }
 
-static void LayerNorm_Baseline_fp32(benchmark::State& benchmark_state) {
-  LayerNorm_Baseline(benchmark_state, DataType::Float);
+static void Baseline_LayerNorm_fp32(benchmark::State& benchmark_state) {
+  Baseline_LayerNorm(benchmark_state, DataType::Float);
 }
 
-static void LayerNorm_Baseline_fp16(benchmark::State& benchmark_state) {
-  LayerNorm_Baseline(benchmark_state, DataType::Half);
+static void Baseline_LayerNorm_fp16(benchmark::State& benchmark_state) {
+  Baseline_LayerNorm(benchmark_state, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp32_LayerNorm,
+    NvFuserScheduler_fp32_LayerNorm,
     setupLayerNorm,
-    nvFuserScheduler_LayerNorm,
+    NvFuserScheduler_LayerNorm,
     DataType::Float);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_LayerNorm)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_LayerNorm)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp16_LayerNorm,
+    NvFuserScheduler_fp16_LayerNorm,
     setupLayerNorm,
-    nvFuserScheduler_LayerNorm,
+    NvFuserScheduler_LayerNorm,
     DataType::Half);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_LayerNorm)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp16_LayerNorm)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
@@ -144,13 +144,13 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_LayerNorm)
 
 //------------------------------------------------------------------------------
 
-BENCHMARK(LayerNorm_Baseline_fp32)
+BENCHMARK(Baseline_LayerNorm_fp32)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(LayerNorm_Baseline_fp16)
+BENCHMARK(Baseline_LayerNorm_fp16)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)

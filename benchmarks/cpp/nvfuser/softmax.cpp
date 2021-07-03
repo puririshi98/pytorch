@@ -41,7 +41,7 @@ static void setupSoftmax(
   fusion->addOutput(output);
 }
 
-static void nvFuserScheduler_Softmax(
+static void NvFuserScheduler_Softmax(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype,
@@ -67,7 +67,7 @@ static void nvFuserScheduler_Softmax(
 
 //------------------------------------------------------------------------------
 
-static void Softmax_Baseline(
+static void Baseline_Softmax_
     benchmark::State& benchmark_state,
     DataType dtype) {
   std::vector<int64_t> input_shape{
@@ -93,12 +93,12 @@ static void Softmax_Baseline(
       (2 * aten_input.numel() * int64_t(dataTypeSize(dtype))));
 }
 
-static void Softmax_Baseline_fp32(benchmark::State& benchmark_state) {
-  Softmax_Baseline(benchmark_state, DataType::Float);
+static void Baseline_Softmax_fp32(benchmark::State& benchmark_state) {
+  Baseline_Softmax_benchmark_state, DataType::Float);
 }
 
-static void Softmax_Baseline_fp16(benchmark::State& benchmark_state) {
-  Softmax_Baseline(benchmark_state, DataType::Half);
+static void Baseline_Softmax_fp16(benchmark::State& benchmark_state) {
+  Baseline_Softmax_benchmark_state, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
@@ -159,7 +159,7 @@ static void setupSoftmaxDropout(
   fusion->addOutput(dropout_results.mask);
 }
 
-static void nvFuserScheduler_SoftmaxDropout(
+static void NvFuserScheduler_SoftmaxDropout(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype,
@@ -187,16 +187,16 @@ static void nvFuserScheduler_SoftmaxDropout(
   runBenchmarkIterations(benchmark_state, fusion_executor_cache, aten_inputs);
 
   benchmark_state.SetBytesProcessed(
-      int64_t(benchmark_state.iterations()) * 6 * 256 * 12 * 100 *
+      int64_t(benchmark_state.iterations()) * 5 * 256 * 12 * 100 *
           benchmark_state.range(0) * int64_t(dataTypeSize(dtype)) +
       // bool mask
-      int64_t(benchmark_state.iterations()) * 6 * 256 * 12 * 100 *
+      int64_t(benchmark_state.iterations()) * 1 * 256 * 12 * 100 *
           benchmark_state.range(0) * int64_t(dataTypeSize(DataType::Bool)));
 }
 
 //------------------------------------------------------------------------------
 
-static void Softmax_Dropout_Baseline(
+static void Baseline_Softmax_Dropout_
     benchmark::State& benchmark_state,
     const int kReductionAxis,
     DataType dtype) {
@@ -233,97 +233,97 @@ static void Softmax_Dropout_Baseline(
   }
 
   benchmark_state.SetBytesProcessed(
-      int64_t(benchmark_state.iterations()) * 6 * 256 * 12 * 100 *
+      int64_t(benchmark_state.iterations()) * 5 * 256 * 12 * 100 *
           benchmark_state.range(0) * int64_t(dataTypeSize(dtype)) +
       // bool mask
-      int64_t(benchmark_state.iterations()) * 6 * 256 * 12 * 100 *
+      int64_t(benchmark_state.iterations()) * 1 * 256 * 12 * 100 *
           benchmark_state.range(0) * int64_t(dataTypeSize(DataType::Bool)));
 }
 
 //------------------------------------------------------------------------------
 
-static void Softmax_Dropout_Baseline_fp32_Inner(
+static void Baseline_Softmax_Dropout_fp32_Inner(
     benchmark::State& benchmark_state) {
-  Softmax_Dropout_Baseline(benchmark_state, 3, DataType::Float);
+  Baseline_Softmax_Dropout_benchmark_state, 3, DataType::Float);
 }
 
-static void Softmax_Dropout_Baseline_fp32_Outer(
+static void Baseline_Softmax_Dropout_fp32_Outer(
     benchmark::State& benchmark_state) {
-  Softmax_Dropout_Baseline(benchmark_state, 1, DataType::Float);
+  Baseline_Softmax_Dropout_benchmark_state, 1, DataType::Float);
 }
 
-static void Softmax_Dropout_Baseline_fp16_Inner(
+static void Baseline_Softmax_Dropout_fp16_Inner(
     benchmark::State& benchmark_state) {
-  Softmax_Dropout_Baseline(benchmark_state, 3, DataType::Half);
+  Baseline_Softmax_Dropout_benchmark_state, 3, DataType::Half);
 }
 
-static void Softmax_Dropout_Baseline_fp16_Outer(
+static void Baseline_Softmax_Dropout_fp16_Outer(
     benchmark::State& benchmark_state) {
-  Softmax_Dropout_Baseline(benchmark_state, 1, DataType::Half);
+  Baseline_Softmax_Dropout_benchmark_state, 1, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp32_Softmax_Outer,
+    NvFuserScheduler_fp32_Softmax_Outer,
     setupSoftmax,
-    nvFuserScheduler_Softmax,
+    NvFuserScheduler_Softmax,
     DataType::Float,
     0);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_Softmax_Outer)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_Softmax_Outer)
     ->RangeMultiplier(2)
     ->Ranges({{656, 656}, {8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp32_Softmax_Inner,
+    NvFuserScheduler_fp32_Softmax_Inner,
     setupSoftmax,
-    nvFuserScheduler_Softmax,
+    NvFuserScheduler_Softmax,
     DataType::Float,
     1);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_Softmax_Inner)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_Softmax_Inner)
     ->RangeMultiplier(2)
     ->Ranges({{656, 656}, {8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp16_Softmax_Outer,
+    NvFuserScheduler_fp16_Softmax_Outer,
     setupSoftmax,
-    nvFuserScheduler_Softmax,
+    NvFuserScheduler_Softmax,
     DataType::Half,
     0);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_Softmax_Outer)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp16_Softmax_Outer)
     ->RangeMultiplier(2)
     ->Ranges({{656, 656}, {8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp16_Softmax_Inner,
+    NvFuserScheduler_fp16_Softmax_Inner,
     setupSoftmax,
-    nvFuserScheduler_Softmax,
+    NvFuserScheduler_Softmax,
     DataType::Half,
     1);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_Softmax_Inner)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp16_Softmax_Inner)
     ->RangeMultiplier(2)
     ->Ranges({{656, 656}, {8, 8 << 12}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_SoftmaxDropoutInner_fp32,
+    NvFuserScheduler_SoftmaxDropoutInner_fp32,
     setupSoftmaxDropout,
-    nvFuserScheduler_SoftmaxDropout,
+    NvFuserScheduler_SoftmaxDropout,
     DataType::Float,
     3);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutInner_fp32)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutInner_fp32)
     ->Arg(8)
     ->Arg(16)
     ->Arg(24)
@@ -343,15 +343,14 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutInner_fp32)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-// TODO: Enable
 // NVFUSER_BENCHMARK_DEFINE(
-//     nvFuserScheduler_SoftmaxDropoutOuter_fp32,
+//     NvFuserScheduler_SoftmaxDropoutOuter_fp32,
 //     setupSoftmaxDropout,
-//     nvFuserScheduler_SoftmaxDropout,
+//     NvFuserScheduler_SoftmaxDropout,
 //     DataType::Float,
 //     1);
 
-// NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutOuter_fp32)
+// NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp32)
 //     ->Arg(8)
 //     ->Arg(16)
 //     ->Arg(24)
@@ -372,13 +371,13 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutInner_fp32)
 //     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_SoftmaxDropoutInner_fp16,
+    NvFuserScheduler_SoftmaxDropoutInner_fp16,
     setupSoftmaxDropout,
-    nvFuserScheduler_SoftmaxDropout,
+    NvFuserScheduler_SoftmaxDropout,
     DataType::Half,
     3);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutInner_fp16)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutInner_fp16)
     ->Arg(8)
     ->Arg(16)
     ->Arg(24)
@@ -398,15 +397,14 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutInner_fp16)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-// TODO: Enable
 // NVFUSER_BENCHMARK_DEFINE(
-//     nvFuserScheduler_SoftmaxDropoutOuter_fp16,
+//     NvFuserScheduler_SoftmaxDropoutOuter_fp16,
 //     setupSoftmaxDropout,
-//     nvFuserScheduler_SoftmaxDropout,
+//     NvFuserScheduler_SoftmaxDropout,
 //     DataType::Half,
 //     1);
 
-// NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutOuter_fp16)
+// NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp16)
 //     ->Arg(8)
 //     ->Arg(16)
 //     ->Arg(24)
@@ -428,19 +426,19 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_SoftmaxDropoutInner_fp16)
 
 //------------------------------------------------------------------------------
 
-BENCHMARK(Softmax_Baseline_fp32)
+BENCHMARK(Baseline_Softmax_fp32)
     ->RangeMultiplier(2)
     ->Ranges({{656, 656}, {8, 8 << 12}, {0, 1}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(Softmax_Baseline_fp16)
+BENCHMARK(Baseline_Softmax_fp16)
     ->RangeMultiplier(2)
     ->Ranges({{656, 656}, {8, 8 << 12}, {0, 1}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(Softmax_Dropout_Baseline_fp32_Inner)
+BENCHMARK(Baseline_Softmax_Dropout_fp32_Inner)
     ->Arg(8)
     ->Arg(16)
     ->Arg(24)
@@ -460,7 +458,7 @@ BENCHMARK(Softmax_Dropout_Baseline_fp32_Inner)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(Softmax_Dropout_Baseline_fp32_Outer)
+BENCHMARK(Baseline_Softmax_Dropout_fp32_Outer)
     ->Arg(8)
     ->Arg(16)
     ->Arg(24)
@@ -480,7 +478,7 @@ BENCHMARK(Softmax_Dropout_Baseline_fp32_Outer)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(Softmax_Dropout_Baseline_fp16_Inner)
+BENCHMARK(Baseline_Softmax_Dropout_fp16_Inner)
     ->Arg(8)
     ->Arg(16)
     ->Arg(24)
@@ -500,7 +498,7 @@ BENCHMARK(Softmax_Dropout_Baseline_fp16_Inner)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(Softmax_Dropout_Baseline_fp16_Outer)
+BENCHMARK(Baseline_Softmax_Dropout_fp16_Outer)
     ->Arg(8)
     ->Arg(16)
     ->Arg(24)

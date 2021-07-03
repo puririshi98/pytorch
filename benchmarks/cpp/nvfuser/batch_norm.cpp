@@ -67,7 +67,7 @@ static void setupBatchNorm(Fusion* fusion, DataType dtype) {
   fusion->addOutput(output);
 }
 
-static void nvFuserScheduler_BatchNorm(
+static void NvFuserScheduler_BatchNorm(
     benchmark::State& benchmark_state,
     FusionExecutorCache* fusion_executor_cache,
     DataType dtype) {
@@ -108,7 +108,7 @@ static void nvFuserScheduler_BatchNorm(
 
 //------------------------------------------------------------------------------
 
-static void BatchNorm_Baseline(
+static void Baseline_BatchNorm(
     benchmark::State& benchmark_state,
     DataType dtype) {
   TORCH_INTERNAL_ASSERT(dtype == DataType::Float || dtype == DataType::Half);
@@ -165,35 +165,35 @@ static void BatchNorm_Baseline(
 
 //------------------------------------------------------------------------------
 
-static void BatchNorm_Baseline_fp32(benchmark::State& benchmark_state) {
-  BatchNorm_Baseline(benchmark_state, DataType::Float);
+static void Baseline_BatchNorm_fp32(benchmark::State& benchmark_state) {
+  Baseline_BatchNorm(benchmark_state, DataType::Float);
 }
 
-static void BatchNorm_Baseline_fp16(benchmark::State& benchmark_state) {
-  BatchNorm_Baseline(benchmark_state, DataType::Half);
+static void Baseline_BatchNorm_fp16(benchmark::State& benchmark_state) {
+  Baseline_BatchNorm(benchmark_state, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp32_BatchNorm,
+    NvFuserScheduler_fp32_BatchNorm,
     setupBatchNorm,
-    nvFuserScheduler_BatchNorm,
+    NvFuserScheduler_BatchNorm,
     DataType::Float);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_BatchNorm)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_BatchNorm)
     ->RangeMultiplier(2)
     ->Ranges({{64, 512}, {8, 32}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp16_BatchNorm,
+    NvFuserScheduler_fp16_BatchNorm,
     setupBatchNorm,
-    nvFuserScheduler_BatchNorm,
+    NvFuserScheduler_BatchNorm,
     DataType::Half);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_BatchNorm)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp16_BatchNorm)
     ->RangeMultiplier(2)
     ->Ranges({{64, 512}, {8, 32}})
     ->Unit(benchmark::kMicrosecond)
@@ -201,13 +201,13 @@ NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_BatchNorm)
 
 //------------------------------------------------------------------------------
 
-BENCHMARK(BatchNorm_Baseline_fp32)
+BENCHMARK(Baseline_BatchNorm_fp32)
     ->RangeMultiplier(2)
     ->Ranges({{64, 512}, {8, 32}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-BENCHMARK(BatchNorm_Baseline_fp16)
+BENCHMARK(Baseline_BatchNorm_fp16)
     ->RangeMultiplier(2)
     ->Ranges({{64, 512}, {8, 32}})
     ->Unit(benchmark::kMicrosecond)
