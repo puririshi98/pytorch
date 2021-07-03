@@ -97,38 +97,7 @@ static void nvFuserScheduler_BatchNorm(
   std::vector<c10::IValue> aten_inputs(
       {at_x, at_weight, at_bias, at_run_mean, at_run_var});
 
-  fusion_executor_cache->profile(true);
-  fusion_executor_cache->runFusionWithInputs(aten_inputs);
-
-  auto compile_log = fusion_executor_cache->getMostRecentExecutorInfo();
-  bool segmented =
-      fusion_executor_cache->getMostRecentKernelRuntime()->isSegmented();
-
-  auto executor_instance = compile_log.fusion_executor;
-
-  TORCH_INTERNAL_ASSERT(compile_log.reduction_params.has_value());
-  TORCH_INTERNAL_ASSERT(compile_log.launch_constraints.has_value());
-  auto rparams = toString(compile_log.reduction_params.value());
-  auto lparams = toString(compile_log.launch_constraints.value());
-
-  if (!segmented) {
-    benchmark_state.SetLabel(rparams + lparams);
-  }
-
-  fusion_executor_cache->profile(false);
-  executor_instance->setMeasureKernelTimeFlag(true);
-  // Sync everything up before we start
-  cudaDeviceSynchronize();
-  for (auto _ : benchmark_state) {
-    auto cg_outputs = fusion_executor_cache->runFusionWithInputs(aten_inputs);
-    if (!segmented) {
-      benchmark_state.SetIterationTime(
-          executor_instance->kernelTimeMs() / 1000.0);
-    }
-  }
-  // Sync everything up before we're finished, don't want to run ahead on the
-  // cpu while benchmarking.
-  cudaDeviceSynchronize();
+  runBenchmarkIterations(benchmark_state, fusion_executor_cache, aten_inputs);
 
   benchmark_state.SetBytesProcessed(
       (int64_t(benchmark_state.iterations()) *

@@ -22,6 +22,14 @@ std::string toString(ReductionParams rparams);
 
 std::string toString(LaunchParams lparams);
 
+// Run benchmark iterations with provided inputs. If not segmented, report
+// kernel time from the runtime, as well as heuristic parameters. If segmented
+// use timers. Make sure to clear L2 between iterations.
+void runBenchmarkIterations(
+    benchmark::State& benchmark_state,
+    FusionExecutorCache* fusion_executor_cache,
+    std::vector<c10::IValue>& aten_inputs);
+
 void clearL2Cache();
 
 class CudaKernelTimer {
@@ -36,6 +44,10 @@ class CudaKernelTimer {
   ~CudaKernelTimer() {
     cudaEventDestroy(start_event);
     cudaEventDestroy(finish_event);
+  }
+
+  void restart() {
+    cudaEventRecord(start_event);
   }
 
   float elapsed() {

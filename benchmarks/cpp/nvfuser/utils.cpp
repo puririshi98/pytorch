@@ -51,6 +51,54 @@ void clearL2Cache() {
   torch::Tensor t1 = torch::clone(t0);
 };
 
+void runBenchmarkIterations(
+    benchmark::State& benchmark_state,
+    FusionExecutorCache* fusion_executor_cache,
+    std::vector<c10::IValue>& aten_inputs) {
+  fusion_executor_cache->runFusionWithInputs(aten_inputs);
+  bool segmented =
+      fusion_executor_cache->getMostRecentKernelRuntime()->isSegmented();
+
+  if (!segmented) {
+    fusion_executor_cache->profile(true);
+    fusion_executor_cache->runFusionWithInputs(aten_inputs);
+    auto compile_log = fusion_executor_cache->getMostRecentExecutorInfo();
+    auto executor_instance = compile_log.fusion_executor;
+    TORCH_INTERNAL_ASSERT(compile_log.reduction_params.has_value());
+    TORCH_INTERNAL_ASSERT(compile_log.launch_constraints.has_value());
+    auto rparams = toString(compile_log.reduction_params.value());
+    auto lparams = toString(compile_log.launch_constraints.value());
+    benchmark_state.SetLabel(rparams + lparams);
+    executor_instance->setMeasureKernelTimeFlag(true);
+
+    // Sync everything up before we start
+    cudaDeviceSynchronize();
+    for (auto _ : benchmark_state) {
+      auto cg_outputs = fusion_executor_cache->runFusionWithInputs(aten_inputs);
+      benchmark_state.SetIterationTime(
+          executor_instance->kernelTimeMs() / 1000.0);
+      clearL2Cache();
+    }
+    // Sync everything up before we're finished, don't want to run ahead on the
+    // cpu while benchmarking.
+    cudaDeviceSynchronize();
+  } else {
+    // Segmented
+    // Sync everything up before we start
+    cudaDeviceSynchronize();
+    CudaKernelTimer timer;
+    for (auto _ : benchmark_state) {
+      timer.restart();
+      auto cg_outputs = fusion_executor_cache->runFusionWithInputs(aten_inputs);
+      benchmark_state.SetIterationTime(timer.elapsed() / 1000.0);
+      clearL2Cache();
+    }
+    // Sync everything up before we're finished, don't want to run ahead on the
+    // cpu while benchmarking.
+    cudaDeviceSynchronize();
+  }
+}
+
 namespace executorCache {
 thread_local ExecutorMap executor_map_;
 ExecutorMap& getGlobalMap() {
