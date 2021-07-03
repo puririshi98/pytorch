@@ -182,24 +182,24 @@ static void Baseline_InstanceNorm_fp16(benchmark::State& benchmark_state) {
 //------------------------------------------------------------------------------
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp32_InstanceNorm,
+    NvFuserScheduler_fp32_InstanceNorm,
     setupInstanceNorm,
-    nvFuserScheduler_InstanceNorm,
+    NvFuserScheduler_InstanceNorm,
     DataType::Float);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp32_InstanceNorm)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_InstanceNorm)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8}, {640, 640}, {64, 256}})
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
-    nvFuserScheduler_fp16_InstanceNorm,
+    NvFuserScheduler_fp16_InstanceNorm,
     setupInstanceNorm,
-    nvFuserScheduler_InstanceNorm,
+    NvFuserScheduler_InstanceNorm,
     DataType::Half);
 
-NVFUSER_BENCHMARK_RUN(nvFuserScheduler_fp16_InstanceNorm)
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp16_InstanceNorm)
     ->RangeMultiplier(2)
     ->Ranges({{8, 8}, {640, 640}, {64, 256}})
     ->Unit(benchmark::kMicrosecond)

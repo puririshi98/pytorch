@@ -57,7 +57,7 @@ static void NvFuserScheduler_Softmax(
       at::TensorOptions().dtype(data_type_to_aten(dtype)).device(at::kCUDA, 0);
   at::Tensor aten_input = at::randn(input_shape, options);
   std::vector<c10::IValue> aten_inputs({aten_input});
-  
+
   runBenchmarkIterations(benchmark_state, fusion_executor_cache, aten_inputs);
 
   benchmark_state.SetBytesProcessed(
@@ -67,7 +67,7 @@ static void NvFuserScheduler_Softmax(
 
 //------------------------------------------------------------------------------
 
-static void Baseline_Softmax_
+static void Baseline_Softmax(
     benchmark::State& benchmark_state,
     DataType dtype) {
   std::vector<int64_t> input_shape{
@@ -94,11 +94,11 @@ static void Baseline_Softmax_
 }
 
 static void Baseline_Softmax_fp32(benchmark::State& benchmark_state) {
-  Baseline_Softmax_benchmark_state, DataType::Float);
+  Baseline_Softmax(benchmark_state, DataType::Float);
 }
 
 static void Baseline_Softmax_fp16(benchmark::State& benchmark_state) {
-  Baseline_Softmax_benchmark_state, DataType::Half);
+  Baseline_Softmax(benchmark_state, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
@@ -196,7 +196,7 @@ static void NvFuserScheduler_SoftmaxDropout(
 
 //------------------------------------------------------------------------------
 
-static void Baseline_Softmax_Dropout_
+static void Baseline_Softmax_Dropout(
     benchmark::State& benchmark_state,
     const int kReductionAxis,
     DataType dtype) {
@@ -244,22 +244,22 @@ static void Baseline_Softmax_Dropout_
 
 static void Baseline_Softmax_Dropout_fp32_Inner(
     benchmark::State& benchmark_state) {
-  Baseline_Softmax_Dropout_benchmark_state, 3, DataType::Float);
+  Baseline_Softmax_Dropout(benchmark_state, 3, DataType::Float);
 }
 
 static void Baseline_Softmax_Dropout_fp32_Outer(
     benchmark::State& benchmark_state) {
-  Baseline_Softmax_Dropout_benchmark_state, 1, DataType::Float);
+  Baseline_Softmax_Dropout(benchmark_state, 1, DataType::Float);
 }
 
 static void Baseline_Softmax_Dropout_fp16_Inner(
     benchmark::State& benchmark_state) {
-  Baseline_Softmax_Dropout_benchmark_state, 3, DataType::Half);
+  Baseline_Softmax_Dropout(benchmark_state, 3, DataType::Half);
 }
 
 static void Baseline_Softmax_Dropout_fp16_Outer(
     benchmark::State& benchmark_state) {
-  Baseline_Softmax_Dropout_benchmark_state, 1, DataType::Half);
+  Baseline_Softmax_Dropout(benchmark_state, 1, DataType::Half);
 }
 
 //------------------------------------------------------------------------------
