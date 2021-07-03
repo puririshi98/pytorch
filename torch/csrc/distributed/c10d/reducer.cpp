@@ -19,7 +19,6 @@
 #include <torch/csrc/utils/memory.h>
 
 namespace c10d {
-int kDefaultFirstBucketBytes = int(1024*1024 * 1024);
 
 namespace {
 
