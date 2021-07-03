@@ -19,6 +19,8 @@
 #include <torch/csrc/utils/memory.h>
 
 namespace c10d {
+int kDefaultFirstBucketBytes = int(1024*1024 * 1024);
+
 namespace {
 
 inline int64_t current_time_in_nanos() {
