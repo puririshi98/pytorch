@@ -1631,7 +1631,7 @@ bool Reducer::rebuild_buckets() {
           rebuilt_param_indices_.size()));
   std::vector<std::vector<size_t>> rebuilt_bucket_indices;
   std::vector<size_t> bucket_size_limits;
-  bucket_size_limits.push_back(kDefaultFirstBucketBytes);
+  // bucket_size_limits.push_back(kDefaultFirstBucketBytes);
   bucket_size_limits.push_back(bucket_bytes_cap_);
   rebuilt_bucket_indices = compute_bucket_assignment_by_size(
       rebuilt_params_,
