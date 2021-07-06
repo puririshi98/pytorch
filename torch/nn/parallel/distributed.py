@@ -518,7 +518,7 @@ class DistributedDataParallel(Module):
             self.parameters_to_ignore = module._ddp_params_and_buffers_to_ignore
         else:
             self.parameters_to_ignore = []
-
+        dist._DEFAULT_FIRST_BUCKET_BYTES = 1024*1024*1024
         if check_reduction:
             # This argument is no longer used since the reducer
             # will ensure reduction completes even if some parameters
@@ -1020,6 +1020,7 @@ class DistributedDataParallel(Module):
     # Schedule allreduce ops to match those scheduled in the reducer's backward
     # pass.
     def _match_all_reduce_for_bwd_pass(self):
+        print("Entered _match_all_reduce_for_bwd_pass")
         allreduce_work = []
         # Schedule allreduce in the same order as Reducer schedules them, i.e.
         # the order of the buckets. Retrieving the bucket order from the reducer
@@ -1032,6 +1033,7 @@ class DistributedDataParallel(Module):
             # world size, if not, the dividing factor is reduced by the number
             # of joined processes.
             zero_tensors = [torch.zeros_like(t) for t in bucket_tensors]
+            print("running process group allreduce")
             work = self.process_group.allreduce(zero_tensors)
             allreduce_work.append(work)
         for work in allreduce_work:
@@ -1370,6 +1372,8 @@ class DistributedDataParallel(Module):
             [input_rank if rank_cond else -1],
             device=self.device,
         )
+        print("running dist all reduce")
+        print("rank to use:", rank_to_use)
         dist.all_reduce(rank_to_use, op=ReduceOp.MAX, group=self.process_group)
         if rank_to_use.item() == -1:
             self._log_and_throw(
