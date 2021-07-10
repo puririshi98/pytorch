@@ -351,34 +351,32 @@ NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutInner_fp32)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-// TODO: Enable
-// NVFUSER_BENCHMARK_DEFINE(
-//     NvFuserScheduler_SoftmaxDropoutOuter_fp32,
-//     setupSoftmaxDropout,
-//     NvFuserScheduler_SoftmaxDropout,
-//     DataType::Float,
-//     1);
+NVFUSER_BENCHMARK_DEFINE(
+    NvFuserScheduler_SoftmaxDropoutOuter_fp32,
+    setupSoftmaxDropout,
+    NvFuserScheduler_SoftmaxDropout,
+    DataType::Float,
+    1);
 
-// TODO: Enable
-// NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp32)
-//     ->Arg(8)
-//     ->Arg(16)
-//     ->Arg(24)
-//     ->Arg(32)
-//     ->Arg(40)
-//     ->Arg(48)
-//     ->Arg(56)
-//     ->Arg(64)
-//     ->Arg(72)
-//     ->Arg(80)
-//     ->Arg(88)
-//     ->Arg(96)
-//     ->Arg(104)
-//     ->Arg(112)
-//     ->Arg(120)
-//     ->Arg(128)
-//     ->Unit(benchmark::kMicrosecond)
-//     ->UseManualTime();
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp32)
+    ->Arg(8)
+    ->Arg(16)
+    ->Arg(24)
+    ->Arg(32)
+    ->Arg(40)
+    ->Arg(48)
+    ->Arg(56)
+    ->Arg(64)
+    ->Arg(72)
+    ->Arg(80)
+    ->Arg(88)
+    ->Arg(96)
+    ->Arg(104)
+    ->Arg(112)
+    ->Arg(120)
+    ->Arg(128)
+    ->Unit(benchmark::kMicrosecond)
+    ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
     NvFuserScheduler_SoftmaxDropoutInner_fp16,
@@ -407,34 +405,32 @@ NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutInner_fp16)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-// TODO: Enable
-// NVFUSER_BENCHMARK_DEFINE(
-//     NvFuserScheduler_SoftmaxDropoutOuter_fp16,
-//     setupSoftmaxDropout,
-//     NvFuserScheduler_SoftmaxDropout,
-//     DataType::Half,
-//     1);
+NVFUSER_BENCHMARK_DEFINE(
+    NvFuserScheduler_SoftmaxDropoutOuter_fp16,
+    setupSoftmaxDropout,
+    NvFuserScheduler_SoftmaxDropout,
+    DataType::Half,
+    1);
 
-// TODO: Enable
-// NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp16)
-//     ->Arg(8)
-//     ->Arg(16)
-//     ->Arg(24)
-//     ->Arg(32)
-//     ->Arg(40)
-//     ->Arg(48)
-//     ->Arg(56)
-//     ->Arg(64)
-//     ->Arg(72)
-//     ->Arg(80)
-//     ->Arg(88)
-//     ->Arg(96)
-//     ->Arg(104)
-//     ->Arg(112)
-//     ->Arg(120)
-//     ->Arg(128)
-//     ->Unit(benchmark::kMicrosecond)
-//     ->UseManualTime();
+NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp16)
+    ->Arg(8)
+    ->Arg(16)
+    ->Arg(24)
+    ->Arg(32)
+    ->Arg(40)
+    ->Arg(48)
+    ->Arg(56)
+    ->Arg(64)
+    ->Arg(72)
+    ->Arg(80)
+    ->Arg(88)
+    ->Arg(96)
+    ->Arg(104)
+    ->Arg(112)
+    ->Arg(120)
+    ->Arg(128)
+    ->Unit(benchmark::kMicrosecond)
+    ->UseManualTime();
 
 //------------------------------------------------------------------------------
 
