@@ -73,8 +73,9 @@ static void NvFuserScheduler_LayerNorm(
   runBenchmarkIterations(benchmark_state, fusion_executor_cache, aten_inputs);
 
   benchmark_state.SetBytesProcessed(
-      int64_t(benchmark_state.iterations()) * 2 *
-      (input.numel() + input_shape[0]) * int64_t(dataTypeSize(dtype)));
+      int64_t(benchmark_state.iterations()) *
+      (2 * input.numel() + weight.numel() + bias.numel()) *
+      int64_t(dataTypeSize(dtype)));
 }
 
 //------------------------------------------------------------------------------

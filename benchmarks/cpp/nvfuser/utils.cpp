@@ -85,6 +85,10 @@ void runBenchmarkIterations(
   } else {
     // Segmented
     // Sync everything up before we start
+    {
+      // Compile/warmup
+      auto cg_outputs = fusion_executor_cache->runFusionWithInputs(aten_inputs);
+    }
     cudaDeviceSynchronize();
     CudaKernelTimer timer;
     for (auto _ : benchmark_state) {

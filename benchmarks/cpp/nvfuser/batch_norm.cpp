@@ -101,9 +101,10 @@ static void NvFuserScheduler_BatchNorm(
 
   benchmark_state.SetBytesProcessed(
       (int64_t(benchmark_state.iterations()) *
-       (2 * at_x.numel() + 2 * at_weight.numel()) *
+       (2 * (at_x.numel() + at_weight.numel() + at_bias.numel())) *
        int64_t(dataTypeSize(dtype))) +
-      (2 * at_weight.numel() * int64_t(dataTypeSize(DataType::Float))));
+      ((at_run_mean.numel() + at_run_var.numel()) *
+       int64_t(dataTypeSize(DataType::Float))));
 }
 
 //------------------------------------------------------------------------------
@@ -130,13 +131,13 @@ static void Baseline_BatchNorm(
   at::Tensor at_x = at::randn(input_shape, options);
   at::Tensor at_weight = at::ones({input_shape[1]}, options);
   at::Tensor at_bias = at::zeros({input_shape[1]}, options);
-  at::Tensor at_mean = at::zeros({input_shape[1]}, fp32_options);
-  at::Tensor at_var = at::ones({input_shape[1]}, fp32_options);
+  at::Tensor at_running_mean = at::zeros({input_shape[1]}, fp32_options);
+  at::Tensor at_running_var = at::ones({input_shape[1]}, fp32_options);
 
   auto ato_weight = c10::optional<at::Tensor>(at_weight);
   auto ato_bias = c10::optional<at::Tensor>(at_bias);
-  auto ato_running_mean = c10::optional<at::Tensor>(at_mean);
-  auto ato_running_var = c10::optional<at::Tensor>(at_var);
+  auto ato_running_mean = c10::optional<at::Tensor>(at_running_mean);
+  auto ato_running_var = c10::optional<at::Tensor>(at_running_var);
 
   cudaDeviceSynchronize();
 
@@ -155,12 +156,12 @@ static void Baseline_BatchNorm(
     benchmark_state.SetIterationTime(timer.elapsed() / 1000.0);
     cudaDeviceSynchronize();
   }
-
   benchmark_state.SetBytesProcessed(
       (int64_t(benchmark_state.iterations()) *
-       (2 * at_x.numel() + 2 * at_weight.numel()) *
+       (2 * (at_x.numel() + at_weight.numel() + at_bias.numel())) *
        int64_t(dataTypeSize(dtype))) +
-      (2 * at_weight.numel() * int64_t(dataTypeSize(DataType::Float))));
+      ((at_running_mean.numel() + at_running_var.numel()) *
+       int64_t(dataTypeSize(DataType::Float))));
 }
 
 //------------------------------------------------------------------------------

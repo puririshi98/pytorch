@@ -99,12 +99,12 @@ static void NvFuserScheduler_InstanceNorm(
       input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
   const size_t kChannels = input_shape[1];
 
-  // Read: x, weight, bias
+  // Read: x, weight, bias, running_mean, running_var
   // Write: y, running_mean, running_var
   benchmark_state.SetBytesProcessed(
       benchmark_state.iterations() *
       ((kChannels * 2 + kSize * 2) * dataTypeSize(dtype) +
-       (kChannels * 2) * dataTypeSize(DataType::Float)));
+       (kChannels * 2 * 2) * dataTypeSize(DataType::Float)));
 }
 
 static void Baseline_InstanceNorm(
@@ -161,12 +161,12 @@ static void Baseline_InstanceNorm(
       input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3];
   const size_t kChannels = input_shape[1];
 
-  // Read: x, weight, bias
+  // Read: x, weight, bias, running_mean, running_var
   // Write: y, running_mean, running_var
   benchmark_state.SetBytesProcessed(
       benchmark_state.iterations() *
       ((kChannels * 2 + kSize * 2) * dataTypeSize(dtype) +
-       (kChannels * 2) * dataTypeSize(DataType::Float)));
+       (kChannels * 2 * 2) * dataTypeSize(DataType::Float)));
 }
 
 //------------------------------------------------------------------------------

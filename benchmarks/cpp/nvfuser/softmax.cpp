@@ -186,12 +186,16 @@ static void NvFuserScheduler_SoftmaxDropout(
 
   runBenchmarkIterations(benchmark_state, fusion_executor_cache, aten_inputs);
 
+  // 5 dtype: attention_scores + attention_mask + attention_scores_out +
+  // attention_probs_out + output
+  // 1 bool: dropout_results.mask
+  // All the same size
   benchmark_state.SetBytesProcessed(
-      int64_t(benchmark_state.iterations()) * 5 * 256 * 12 * 100 *
-          benchmark_state.range(0) * int64_t(dataTypeSize(dtype)) +
+      int64_t(benchmark_state.iterations()) * 5 * at_scores.numel() *
+          int64_t(dataTypeSize(dtype)) +
       // bool mask
-      int64_t(benchmark_state.iterations()) * 1 * 256 * 12 * 100 *
-          benchmark_state.range(0) * int64_t(dataTypeSize(DataType::Bool)));
+      int64_t(benchmark_state.iterations()) * at_scores.numel() *
+          int64_t(dataTypeSize(DataType::Bool)));
 }
 
 //------------------------------------------------------------------------------
@@ -232,12 +236,16 @@ static void Baseline_Softmax_Dropout(
     cudaDeviceSynchronize();
   }
 
+  // 5 dtype: attention_scores + attention_mask + attention_scores_out +
+  // attention_probs_out + output
+  // 1 bool: dropout_results.mask
+  // All the same size
   benchmark_state.SetBytesProcessed(
-      int64_t(benchmark_state.iterations()) * 5 * 256 * 12 * 100 *
-          benchmark_state.range(0) * int64_t(dataTypeSize(dtype)) +
+      int64_t(benchmark_state.iterations()) * 5 * at_scores.numel() *
+          int64_t(dataTypeSize(dtype)) +
       // bool mask
-      int64_t(benchmark_state.iterations()) * 1 * 256 * 12 * 100 *
-          benchmark_state.range(0) * int64_t(dataTypeSize(DataType::Bool)));
+      int64_t(benchmark_state.iterations()) * at_scores.numel() *
+          int64_t(dataTypeSize(DataType::Bool)));
 }
 
 //------------------------------------------------------------------------------
@@ -343,32 +351,34 @@ NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutInner_fp32)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-NVFUSER_BENCHMARK_DEFINE(
-    NvFuserScheduler_SoftmaxDropoutOuter_fp32,
-    setupSoftmaxDropout,
-    NvFuserScheduler_SoftmaxDropout,
-    DataType::Float,
-    1);
+// TODO: Enable
+// NVFUSER_BENCHMARK_DEFINE(
+//     NvFuserScheduler_SoftmaxDropoutOuter_fp32,
+//     setupSoftmaxDropout,
+//     NvFuserScheduler_SoftmaxDropout,
+//     DataType::Float,
+//     1);
 
-NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp32)
-    ->Arg(8)
-    ->Arg(16)
-    ->Arg(24)
-    ->Arg(32)
-    ->Arg(40)
-    ->Arg(48)
-    ->Arg(56)
-    ->Arg(64)
-    ->Arg(72)
-    ->Arg(80)
-    ->Arg(88)
-    ->Arg(96)
-    ->Arg(104)
-    ->Arg(112)
-    ->Arg(120)
-    ->Arg(128)
-    ->Unit(benchmark::kMicrosecond)
-    ->UseManualTime();
+// TODO: Enable
+// NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp32)
+//     ->Arg(8)
+//     ->Arg(16)
+//     ->Arg(24)
+//     ->Arg(32)
+//     ->Arg(40)
+//     ->Arg(48)
+//     ->Arg(56)
+//     ->Arg(64)
+//     ->Arg(72)
+//     ->Arg(80)
+//     ->Arg(88)
+//     ->Arg(96)
+//     ->Arg(104)
+//     ->Arg(112)
+//     ->Arg(120)
+//     ->Arg(128)
+//     ->Unit(benchmark::kMicrosecond)
+//     ->UseManualTime();
 
 NVFUSER_BENCHMARK_DEFINE(
     NvFuserScheduler_SoftmaxDropoutInner_fp16,
@@ -397,32 +407,34 @@ NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutInner_fp16)
     ->Unit(benchmark::kMicrosecond)
     ->UseManualTime();
 
-NVFUSER_BENCHMARK_DEFINE(
-    NvFuserScheduler_SoftmaxDropoutOuter_fp16,
-    setupSoftmaxDropout,
-    NvFuserScheduler_SoftmaxDropout,
-    DataType::Half,
-    1);
+// TODO: Enable
+// NVFUSER_BENCHMARK_DEFINE(
+//     NvFuserScheduler_SoftmaxDropoutOuter_fp16,
+//     setupSoftmaxDropout,
+//     NvFuserScheduler_SoftmaxDropout,
+//     DataType::Half,
+//     1);
 
-NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp16)
-    ->Arg(8)
-    ->Arg(16)
-    ->Arg(24)
-    ->Arg(32)
-    ->Arg(40)
-    ->Arg(48)
-    ->Arg(56)
-    ->Arg(64)
-    ->Arg(72)
-    ->Arg(80)
-    ->Arg(88)
-    ->Arg(96)
-    ->Arg(104)
-    ->Arg(112)
-    ->Arg(120)
-    ->Arg(128)
-    ->Unit(benchmark::kMicrosecond)
-    ->UseManualTime();
+// TODO: Enable
+// NVFUSER_BENCHMARK_RUN(NvFuserScheduler_SoftmaxDropoutOuter_fp16)
+//     ->Arg(8)
+//     ->Arg(16)
+//     ->Arg(24)
+//     ->Arg(32)
+//     ->Arg(40)
+//     ->Arg(48)
+//     ->Arg(56)
+//     ->Arg(64)
+//     ->Arg(72)
+//     ->Arg(80)
+//     ->Arg(88)
+//     ->Arg(96)
+//     ->Arg(104)
+//     ->Arg(112)
+//     ->Arg(120)
+//     ->Arg(128)
+//     ->Unit(benchmark::kMicrosecond)
+//     ->UseManualTime();
 
 //------------------------------------------------------------------------------
 
