@@ -68,7 +68,7 @@ void IrPrinter::handle(const TensorView* tv) {
     os_ << typePrefix(tv->getDataType().value()) << tv->name();
   } else {
     os_ << "T" << tv->name();
-    switch(tv->getMemoryType()){
+    switch (tv->getMemoryType()) {
       case MemoryType::Global:
         os_ << "_g";
         break;

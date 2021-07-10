@@ -206,13 +206,47 @@ unsigned int getReplayablePosCasP(
   return 0;
 }
 
+std::vector<TensorView*> uniqueEntries(const std::vector<TensorView*>& tvs) {
+  std::vector<TensorView*> unique_tvs;
+  std::unordered_set<TensorView*> inserted_tvs;
+  for (auto tv : tvs) {
+    if (inserted_tvs.emplace(tv).second) {
+      unique_tvs.emplace_back(tv);
+    }
+  }
+  return unique_tvs;
+}
+
+// Copied from scheduler utils. TODO: Put in ir_utils
+std::vector<TensorView*> consumerTvsOf(TensorView* tv) {
+  std::vector<TensorView*> consumer_tvs;
+  for (auto use_expr : tv->uses()) {
+    auto outputs = ir_utils::filterByType<TensorView>(use_expr->outputs());
+    consumer_tvs.insert(consumer_tvs.end(), outputs.begin(), outputs.end());
+  }
+  return uniqueEntries(consumer_tvs);
+}
+
+// Copied from scheduler utils. TODO: Put in ir_utils
+std::vector<TensorView*> consumerTvsOf(const std::vector<TensorView*>& tvs) {
+  std::vector<TensorView*> all_consumer_tvs;
+  for (auto tv : tvs) {
+    auto consumer_tvs = consumerTvsOf(tv);
+    all_consumer_tvs.insert(
+        all_consumer_tvs.end(), consumer_tvs.begin(), consumer_tvs.end());
+  }
+
+  return uniqueEntries(all_consumer_tvs);
+}
+
 } // namespace
 
 void ComputeAt::runAt(
     TensorView* producer,
     TensorView* consumer,
     unsigned int consumer_position,
-    ComputeAtMode mode) {
+    ComputeAtMode mode,
+    bool experimental) {
   FUSER_PERF_SCOPE("ComputeAt::run");
 
   // Make sure the correct fusion is setup between this and consumer.
@@ -235,7 +269,8 @@ void ComputeAt::runAt(
       ", however it is not.");
 
   // Run computeAt on our potentially modified producer(s)
-  ComputeAt ca(producer, consumer, consumer, consumer_position, mode);
+  ComputeAt ca(
+      producer, consumer, consumer, consumer_position, mode, experimental);
   ca.runPass();
 }
 
@@ -243,7 +278,8 @@ void ComputeAt::runWith(
     TensorView* producer,
     TensorView* consumer,
     unsigned int producer_position,
-    ComputeAtMode mode) {
+    ComputeAtMode mode,
+    bool experimental) {
   FUSER_PERF_SCOPE("ComputeAt::runWith");
 
   // Make sure the correct fusion is setup between this and consumer.
@@ -265,7 +301,8 @@ void ComputeAt::runWith(
   // Make sure Fusion Guard is set appropriately
   FusionGuard fg(producer->fusion());
 
-  ComputeAt ca(producer, consumer, producer, producer_position, mode);
+  ComputeAt ca(
+      producer, consumer, producer, producer_position, mode, experimental);
   ca.runPass();
 }
 
@@ -418,8 +455,12 @@ void ComputeAt::setCommonConsumer() {
   // after consumer
   for (const auto& tv_chain : all_chains) {
     for (auto tv : tv_chain) {
-      if (tv != consumer_)
+      if (tv != consumer_) {
         common_consumers.erase(tv);
+      } else {
+        // TODO: does this make sense?
+        break;
+      }
     }
   }
 
@@ -489,6 +530,47 @@ void ComputeAt::traverseForward() {
         DependencyCheck::getAllDependencyChains(producer_, common_consumer_));
   }
 
+  if (experimental_) {
+    chains =
+        tvChains(DependencyCheck::getAllDependencyChains(producer_, consumer_));
+
+    std::unordered_map<TensorView*, std::unordered_set<TensorView*>>
+        forward_calls;
+    for (auto chain : chains) {
+      auto chain_it = chain.begin();
+      TensorView* running_producer = nullptr;
+      TensorView* running_consumer = *chain_it;
+      chain_it++;
+
+      while (chain_it != chain.end()) {
+        running_producer = running_consumer;
+        running_consumer = *chain_it;
+        chain_it++;
+        if (forward_calls.find(running_producer) == forward_calls.end()) {
+          forward_calls[running_producer] = {running_consumer};
+        } else {
+          forward_calls.at(running_producer).emplace(running_consumer);
+        }
+      }
+    }
+
+    // Add uses that aren't already getting called from any producer we process.
+    for (auto entry : forward_calls) {
+      auto producer = entry.first;
+      const auto& called_consumers = entry.second;
+      auto all_consumers = consumerTvsOf(producer);
+      for (auto consumer : all_consumers) {
+        if (called_consumers.find(consumer) == called_consumers.end()) {
+          TORCH_INTERNAL_ASSERT(consumer != producer);
+          std::deque<TensorView*> cleanup_edge;
+          cleanup_edge.push_back(producer);
+          cleanup_edge.push_back(consumer);
+          chains.emplace_back(cleanup_edge);
+        }
+      }
+    }
+  }
+
   // propagate forward through all chains
   for (auto tv_dep_chain : chains) {
     TensorView* running_producer = nullptr;
@@ -496,7 +578,9 @@ void ComputeAt::traverseForward() {
     tv_dep_chain.pop_front();
     unsigned int running_producer_pos = producer_position_;
 
-    TORCH_INTERNAL_ASSERT(running_consumer == producer_);
+    if (!experimental_) {
+      TORCH_INTERNAL_ASSERT(running_consumer == producer_);
+    }
 
     while (!tv_dep_chain.empty()) {
       running_producer = running_consumer;
@@ -637,12 +721,14 @@ ComputeAt::ComputeAt(
     TensorView* _consumer,
     TensorView* _reference,
     unsigned int _reference_position,
-    ComputeAtMode _mode)
+    ComputeAtMode _mode,
+    bool _experimental)
     : producer_(_producer),
       consumer_(_consumer),
       reference_(_reference),
       reference_position_(_reference_position),
-      mode_(_mode) {
+      mode_(_mode),
+      experimental_(_experimental) {
   TORCH_INTERNAL_ASSERT(
       reference_ == producer_ || reference_ == consumer_,
       "For compute at reference must be producer or consumer, it's neither.",

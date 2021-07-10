@@ -648,6 +648,16 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
     }
   }
 
+  // Make sure we don't have global memory set on intermediate tensors from
+  // fusion segmentation
+  for (auto tv : tvs) {
+    if (tv->isFusionInput() || tv->isFusionOutput()) {
+      tv->setMemoryType(MemoryType::Global);
+    } else {
+      tv->setMemoryType(MemoryType::Local);
+    }
+  }
+
   TORCH_INTERNAL_ASSERT(red_tv != nullptr);
 
   // If either of these are nullptr at the end of this function don't do
