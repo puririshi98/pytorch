@@ -319,6 +319,36 @@ void computeAtBetween(
     const std::vector<TensorView*>& producers,
     const std::vector<TensorView*>& overall_consumers,
     int pos,
+    ComputeAtMode mode,
+    std::unordered_set<TensorView*> tv_filter) {
+  for (auto producer : producers) {
+    // Figure out what's between producer and overall_consumers, will not give
+    // back any consumers that are not downstream from producer
+    auto all_vals_between = DependencyCheck::getAllValsBetween(
+        {producer}, {overall_consumers.begin(), overall_consumers.end()});
+
+    std::unordered_set<Val*> all_vals_between_set(
+        all_vals_between.begin(), all_vals_between.end());
+
+    for (auto consumer : overall_consumers) {
+      if (tv_filter.count(consumer) && all_vals_between_set.count(consumer)) {
+        // The way we generate producers and consumers is that we inch away from
+        // inputs/outputs. There's a chance we could meet in the middle.
+        if (producer == consumer) {
+          continue;
+        }
+        // Assume we don't want to reset computeAt on tensors that have already
+        // performed it.
+        producer->computeAt(consumer, pos, mode, true);
+      }
+    }
+  }
+}
+
+void computeAtBetween(
+    const std::vector<TensorView*>& producers,
+    const std::vector<TensorView*>& overall_consumers,
+    int pos,
     ComputeAtMode mode) {
   for (auto producer : producers) {
     // Figure out what's between producer and overall_consumers, will not give
@@ -339,7 +369,7 @@ void computeAtBetween(
 
         // Assume we don't want to reset computeAt on tensors that have already
         // performed it.
-        producer->computeAt(consumer, pos, mode);
+        producer->computeAt(consumer, pos, mode, false);
       }
     }
   }

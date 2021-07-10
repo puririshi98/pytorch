@@ -120,6 +120,7 @@ TvProperties getProperties(
     Fusion* fusion,
     ExpressionEvaluator& evaluator,
     TensorView* tv);
+
 // Will call computeAt once on each producer, with the first consumer found that
 // is a consumer of the individual producer
 void computeAtBetween(
@@ -127,6 +128,15 @@ void computeAtBetween(
     const std::vector<TensorView*>& consumers,
     int pos,
     ComputeAtMode mode);
+
+// Will call computeAt once on each producer, with the first consumer found that
+// is a consumer of the individual producer
+void computeAtBetween(
+    const std::vector<TensorView*>& producers,
+    const std::vector<TensorView*>& consumers,
+    int pos,
+    ComputeAtMode mode,
+    std::unordered_set<TensorView*> tv_filter);
 
 // Compute the amount of register space would be needed to perform this kernel
 // persistently, only based on buffers that must be persistent, and based on the
