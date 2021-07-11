@@ -339,7 +339,7 @@ void computeAtBetween(
         }
         // Assume we don't want to reset computeAt on tensors that have already
         // performed it.
-        producer->computeAt(consumer, pos, mode, true);
+        producer->computeAt(consumer, pos, mode);
       }
     }
   }
@@ -369,7 +369,7 @@ void computeAtBetween(
 
         // Assume we don't want to reset computeAt on tensors that have already
         // performed it.
-        producer->computeAt(consumer, pos, mode, false);
+        producer->computeAt(consumer, pos, mode);
       }
     }
   }

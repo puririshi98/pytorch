@@ -1439,7 +1439,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
             : std::distance(consumer->domain()->domain().begin(), unroll_it) +
                 1;
         cached_input->computeAt(
-            consumer, unroll_pos, ComputeAtMode::BestEffort, true);
+            consumer, unroll_pos, ComputeAtMode::BestEffort);
         compute_from.push_back(consumer);
         keep_unrolled.emplace(cached_input);
       }
@@ -1465,10 +1465,10 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
             rfactor_tv);
         auto pos = std::distance(rfactor_tv_dom.begin(), reduction_it);
         rfactor_tv->computeWith(
-            reduction_tvs[i], pos, ComputeAtMode::Standard, true);
+            reduction_tvs[i], pos, ComputeAtMode::Standard);
       } else {
         rfactor_tvs[i]->computeWith(
-            reduction_tvs[i], -1, ComputeAtMode::BestEffort, true);
+            reduction_tvs[i], -1, ComputeAtMode::BestEffort);
       }
     }
 
@@ -1519,7 +1519,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
           : std::distance(output->domain()->domain().begin(), unroll_it) + 1;
 
       cached_output->computeAt(
-          output, unroll_pos, ComputeAtMode::BestEffort, true);
+          output, unroll_pos, ComputeAtMode::BestEffort);
 
       compute_to.push_back(cached_output);
       keep_unrolled.emplace(output);
