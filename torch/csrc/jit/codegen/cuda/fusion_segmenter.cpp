@@ -607,12 +607,12 @@ void detailGroupPrint(std::ostream& os, const SegmentedGroup* group) {
   os << "g{"
      << "(" << toString(group->heuristic()) << ")\n";
   os << "inputs: \n";
-  for (auto input : sort_val_by_name(getAllInputs(group))) {
-    os << input << " " << input->getDataType().value() << "\n";
+  for (auto i : sort_val_by_name(getAllInputs(group))) {
+    i->print();
   }
   os << "outputs: \n";
-  for (auto output : sort_val_by_name(getAllOutputs(group))) {
-    os << output << " " << output->getDataType().value() << "\n";
+  for (auto o : sort_val_by_name(getAllOutputs(group))) {
+    o->print();
   }
 
   os << "\n\n";
@@ -1113,7 +1113,7 @@ std::ostream& operator<<(
   for (const auto e : sorted_edges_to_print) {
     os << e << "\n";
   }
-  os << "\ngroup details:\n";
+  os << "group details:\n\n";
   for (const auto g : sorted_groups_to_print) {
     detailGroupPrint(os, g);
   }
