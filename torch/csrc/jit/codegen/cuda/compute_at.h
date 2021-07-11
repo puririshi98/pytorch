@@ -25,8 +25,7 @@ class ComputeAt {
       TensorView* producer,
       TensorView* consumer,
       unsigned int consumer_position,
-      ComputeAtMode mode = ComputeAtMode::Standard,
-      bool experimental = false);
+      ComputeAtMode mode = ComputeAtMode::Standard);
 
   // Runs the compute with pass making consumer look like producer, computing
   // producer relative to consumer
@@ -34,8 +33,7 @@ class ComputeAt {
       TensorView* producer,
       TensorView* consumer,
       unsigned int producer_position,
-      ComputeAtMode mode = ComputeAtMode::Standard,
-      bool experimental = false);
+      ComputeAtMode mode = ComputeAtMode::Standard);
 
  private:
   TensorView* producer_;
@@ -84,8 +82,6 @@ class ComputeAt {
   // Common consumer if it exists
   TensorView* common_consumer_ = nullptr;
 
-  bool experimental_ = false;
-
   // Producer use chains set in, used in a few spots.
   std::deque<std::deque<TensorView*>> producer_use_chains_;
 
@@ -94,8 +90,7 @@ class ComputeAt {
       TensorView* _consumer,
       TensorView* _reference,
       unsigned int _reference_position,
-      ComputeAtMode _mode,
-      bool experimental);
+      ComputeAtMode _mode);
 
   ComputeAt() = delete;
   ~ComputeAt() = default;

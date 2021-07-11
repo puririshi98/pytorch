@@ -199,8 +199,7 @@ void TensorView::setMaxProducer(unsigned int pos, bool decrease) {
 TensorView* TensorView::computeAt(
     TensorView* consumer,
     int position,
-    ComputeAtMode mode,
-    bool experimental) {
+    ComputeAtMode mode) {
   // Make sure this and consumer are not the same tensor, that's illegal
   TORCH_CHECK(!sameAs(consumer), "Cannot call this->computeAt(this, ...)");
 
@@ -220,7 +219,7 @@ TensorView* TensorView::computeAt(
     position = std::min((int)consumer->nDims(), position);
   }
 
-  ComputeAt::runAt(this, consumer, (unsigned int)position, mode, experimental);
+  ComputeAt::runAt(this, consumer, (unsigned int)position, mode);
 
   return this;
 }
@@ -228,8 +227,7 @@ TensorView* TensorView::computeAt(
 TensorView* TensorView::computeWith(
     TensorView* consumer,
     int position,
-    ComputeAtMode mode,
-    bool experimental) {
+    ComputeAtMode mode) {
   // Make sure this and consumer are not the same tensor, that's illegal
   TORCH_CHECK(!sameAs(consumer), "Cannot call this->computeAt(this, ...)");
 
@@ -242,8 +240,7 @@ TensorView* TensorView::computeWith(
       position >= 0 && (unsigned int)position < this->nDims() + 1,
       "Compute at called on an position outside valid range.");
 
-  ComputeAt::runWith(
-      this, consumer, (unsigned int)position, mode, experimental);
+  ComputeAt::runWith(this, consumer, (unsigned int)position, mode);
 
   return this;
 }
