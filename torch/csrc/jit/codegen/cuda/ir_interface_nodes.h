@@ -303,8 +303,8 @@ class TORCH_CUDA_CU_API TensorView : public Val {
   //!  in a multi-output scan pattern
   WelfordResult rFactor(
       const std::vector<int>& axes,
-      TensorView* var,
       TensorView* avg,
+      TensorView* var,
       TensorView* n);
 
   // For all usages of this TensorView, create a new TensorView and
