@@ -296,9 +296,7 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayPasC(
    * (1) replay_PasC.getReplay holds mappings from axes in consumer compute at
    * axes -> corresponding generated axes in producer
    *
-   * (2) Axes in producer->domain() that are in producer_replayed_leaves
-   *
-   * (3) Any axes that were not added, that can be mapped directly from an ID in
+   * (2) Any axes that were not added, that can be mapped directly from an ID in
    * consumer->domain(). These are axes that were "fully replayed" relative to
    * the consumer, even though it wasn't in the computeAt range.
    *
@@ -306,6 +304,8 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayPasC(
    * back to what they were in producer. If they couldn't be forwarded they're
    * left in their "most forwarded" form which may be just a remainder of the
    * transformation required to generate the computeAt axes.
+   *
+   * (3) Axes in producer->domain() that are in producer_replayed_leaves
    *
    * (4) Axes not in producer->domain() that are in producer_replayed_leaves
    *
@@ -331,17 +331,6 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayPasC(
   unsigned int producer_compute_at_axis = new_IDs.size();
 
   // Add axes in (2)
-  for (auto id : producer->domain()->domain()) {
-    if (producer_replayed_leaves.getUnorderedLeafIDs().find(id) !=
-        producer_replayed_leaves.getUnorderedLeafIDs().end()) {
-      if (used_IDs.find(id) == used_IDs.end()) {
-        new_IDs.push_back(id);
-        used_IDs.emplace(id);
-      }
-    }
-  }
-
-  // Add axes in (3)
   for (auto c_id : consumer->domain()->domain()) {
     auto it = replay_PasC.getReplay().find(c_id);
     if (it != replay_PasC.getReplay().end()) {
@@ -352,6 +341,17 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayPasC(
           producer_replayed_leaves.getUnorderedLeafIDs().end()) {
         continue;
       }
+      if (used_IDs.find(id) == used_IDs.end()) {
+        new_IDs.push_back(id);
+        used_IDs.emplace(id);
+      }
+    }
+  }
+
+  // Add axes in (3)
+  for (auto id : producer->domain()->domain()) {
+    if (producer_replayed_leaves.getUnorderedLeafIDs().find(id) !=
+        producer_replayed_leaves.getUnorderedLeafIDs().end()) {
       if (used_IDs.find(id) == used_IDs.end()) {
         new_IDs.push_back(id);
         used_IDs.emplace(id);
@@ -492,22 +492,23 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayCasP(
    * Accumulate axes in to the new domain in the following order, making sure to
    * avoid any duplicates:
    *
-   * (1) replay_CasP.getReplay holds mappings from axes in consumer compute at
+   * (1) replay_PasC.getReplay holds mappings from axes in consumer compute at
    * axes -> corresponding generated axes in producer
    *
-   * (2) Axes in consumer->domain() that are in consumer_replayed_leaves
-   *
-   * (3) Any axes that were not added, that can be mapped directly from an ID in
+   * (2) Any axes that were not added, that can be mapped directly from an ID in
    * producer->domain(). These are axes that were "fully replayed" relative to
    * the producer, even though it wasn't in the computeAt range.
    *
-   * consumer_replayed_leaves now contain ids that we tried to forward
-   * back to what they were in consumer. If they couldn't be forwarded they're
+   * producer_replayed_leaves now contain ids that we tried to forward
+   * back to what they were in producer. If they couldn't be forwarded they're
    * left in their "most forwarded" form which may be just a remainder of the
    * transformation required to generate the computeAt axes.
    *
-   * (4) Axes not in consumer->domain() that are in consumer_replayed_leaves
+   * (3) Axes in producer->domain() that are in producer_replayed_leaves
    *
+   * (4) Axes not in producer->domain() that are in producer_replayed_leaves
+   *
+   * TODO: Should (2) and (3) be swapped?
    */
 
   std::vector<IterDomain*> new_IDs;
@@ -525,17 +526,6 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayCasP(
   }
 
   // Add axes in (2)
-  for (auto id : consumer->domain()->domain()) {
-    if (consumer_replayed_leaves.getUnorderedLeafIDs().find(id) !=
-        consumer_replayed_leaves.getUnorderedLeafIDs().end()) {
-      if (used_IDs.find(id) == used_IDs.end()) {
-        new_IDs.push_back(id);
-        used_IDs.emplace(id);
-      }
-    }
-  }
-
-  // Add axes in (3)
   for (auto p_id : producer->domain()->domain()) {
     auto it = replay_CasP.getReplay().find(p_id);
     if (it != replay_CasP.getReplay().end()) {
@@ -546,6 +536,17 @@ std::pair<TensorDomain*, unsigned int> TransformReplay::replayCasP(
           consumer_replayed_leaves.getUnorderedLeafIDs().end()) {
         continue;
       }
+      if (used_IDs.find(id) == used_IDs.end()) {
+        new_IDs.push_back(id);
+        used_IDs.emplace(id);
+      }
+    }
+  }
+
+  // Add axes in (3)
+  for (auto id : consumer->domain()->domain()) {
+    if (consumer_replayed_leaves.getUnorderedLeafIDs().find(id) !=
+        consumer_replayed_leaves.getUnorderedLeafIDs().end()) {
       if (used_IDs.find(id) == used_IDs.end()) {
         new_IDs.push_back(id);
         used_IDs.emplace(id);
