@@ -693,6 +693,9 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
   if (rparams.loop_unroll > 1) {
     auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
     for (auto tv : in_tvs) {
+      if (tv->uses().empty()) {
+        continue;
+      }
       auto cached_tv = tv->cache_after();
       cached_inputs.emplace_back(cached_tv);
     }
@@ -1015,10 +1018,12 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
       reference_tv != nullptr && reduction_tv != nullptr,
       "Need these two tensor views to finish the scheduling.");
 
+  TransformPropagator::from(reference_tv);
+  scheduler_utils::parallelizeAllLike(
+      reference_tv, scheduler_utils::allTvs(fusion));
+
   if (rparams.loop_unroll > 1) {
     // Schedule unrolling on inputs
-
-    TransformPropagator::from(reference_tv);
 
     // Inline rfactor into reduction
     if (reference_tv != reduction_tv) {
@@ -1055,9 +1060,6 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
     scheduler_utils::computeWithOutputs(
         reduction_tv, -1, ComputeAtMode::MostInlined);
 
-    scheduler_utils::parallelizeAllLike(
-        reference_tv, scheduler_utils::allTvs(fusion));
-
     // Nasty gotcha which we don't have a better mechanism to fix yet
     if (
         // Have an unswitch in the reduction
@@ -1089,16 +1091,12 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
       }
     }
   } else {
-    // Inline and parallelize
-    TransformPropagator::from(reference_tv);
     // Want to inline, especially backwards based on reduction_tv, otherwise
     // rfactor tv may not be inlined correctly
     scheduler_utils::computeAtInputs(
         reduction_tv, -1, ComputeAtMode::MostInlined);
     scheduler_utils::computeWithOutputs(
         reduction_tv, -1, ComputeAtMode::MostInlined);
-    scheduler_utils::parallelizeAllLike(
-        reference_tv, scheduler_utils::allTvs(fusion));
   }
 }
 
