@@ -645,23 +645,12 @@ TensorView* TensorView::cache_before() {
   // producers domain with this domain.
   auto root_domain = getRootDomain();
 
-  TensorView* producer = nullptr;
-  if (hasRFactor()) {
-    producer = new TensorView(
-        new TensorDomain(
-            domain()->getRootDomain(),
-            domain()->getMaybeRFactorDomain(),
-            domain()->domain(),
-            domain()->contiguity()),
-        getDataType().value());
-  } else {
-    producer = new TensorView(
-        new TensorDomain(
-            domain()->getRootDomain(),
-            domain()->domain(),
-            domain()->contiguity()),
-        getDataType().value());
-  }
+  TensorView* producer = new TensorView(
+      new TensorDomain(
+          domain()->getRootDomain(),
+          domain()->domain(),
+          domain()->contiguity()),
+      getDataType().value());
 
   // Set domain of consumer
   TensorView* consumer = this;

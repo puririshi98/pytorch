@@ -52,9 +52,6 @@ std::vector<TensorView*> inputTvsOf(std::vector<TensorView*> tvs);
 std::vector<TensorView*> outputTvsOf(std::vector<TensorView*> tvs);
 
 // returns all tensor views in fusion that are used between outputs and inputs.
-// Order is non-deterministic and non-repeating.
-// TODO: This would be good to have determinsitic and to put outside scheduling
-// as it's generally useful
 TORCH_CUDA_CU_API std::vector<TensorView*> allTvs(Fusion* fusion);
 
 TORCH_CUDA_CU_API void parallelizeAllLike(
