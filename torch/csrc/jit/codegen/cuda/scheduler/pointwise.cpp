@@ -240,7 +240,7 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
   // For intermediate outputs, apply cache_fork
   auto outs = fusion->outputs();
   for (const auto output : outs) {
-    if (!output->uses().empty()) {
+    if (!output->uses().empty() && output->definition() != nullptr) {
       if (output->getValType().value() == ValType::TensorView) {
         output->as<TensorView>()->cache_fork();
       }
@@ -285,6 +285,9 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   // Figure out which inputs to cache for unrolling or vectorization
   for (auto inp : input_tvs) {
+    if (inp->uses().empty()) {
+      continue;
+    }
     cached_inputs.emplace_back(inp->cache_after());
     if (params.vectorize && shouldVectorize(inp, max_dims)) {
       vectorized_tensor.emplace(cached_inputs.back());
@@ -293,6 +296,9 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   // Figure out which outputs to cache for unrolling or vectorization
   for (auto out : output_tvs) {
+    if (out->definition() == nullptr) {
+      continue;
+    }
     cached_outputs.emplace_back(std::make_pair(out, out->cache_before()));
     if (params.vectorize && shouldVectorize(out, max_dims)) {
       vectorized_tensor.emplace(out);
@@ -301,6 +307,9 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   TensorView* reference_tv = nullptr;
   for (auto out : output_tvs) {
+    if (out->definition() == nullptr) {
+      continue;
+    }
     if (nRootDims(out) == max_dims) {
       reference_tv = out;
       break;
@@ -437,8 +446,9 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
         : std::distance(output->domain()->domain().begin(), unswitch_it) + 1;
 
     cached_output->computeAt(output, unswitch_pos, ComputeAtMode::BestEffort);
+    compute_to.push_back(cached_output);
   }
-  // fusion->printMath();
+
   scheduler_utils::computeAtBetween(
       compute_from, compute_to, -1, ComputeAtMode::BestEffort);
 }

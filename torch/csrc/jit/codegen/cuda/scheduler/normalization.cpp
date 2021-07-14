@@ -165,7 +165,8 @@ ReductionParams innerNormalizationHeuristic(
   int64_t remainder_in_output = ceilDiv(num_outputs_for_reduction, bdimy);
 
   // Adjust blocking and setup unrolling
-  if (remainder_in_reduction == 1) {
+  // Disable unrolling on iteration domain for now. TODO: Re-enable.
+  if (remainder_in_reduction == 1 && false) {
     // Small number of reduction elements, don't try to unroll the reduction dim
     unroll_reduction = false;
     // Try unrolling output dimension
@@ -186,7 +187,9 @@ ReductionParams innerNormalizationHeuristic(
 
     remainder_in_reduction = ceilDiv(num_elems_in_reduction, bdimx);
     unroll_factor = std::min(remainder_in_reduction, target_unroll);
-    if (unroll_factor == 1 && !persistence_required) {
+
+    // Disable unrolling on iteration domain for now. TODO: Re-enable.
+    if (unroll_factor == 1 && false) {
       // If we can't unroll reduction dim, unroll output dim
       unroll_reduction = false;
       unroll_factor = std::min(remainder_in_output, target_unroll);
@@ -410,11 +413,13 @@ ReductionParams OuterNormalizationHeuristic(
     // TODO: Check if reduction schedulers actually benefit from this, only
     // considered persistent kernels which have difficulty inlining intermediate
     // values so register space can blow up.
-    unroll_factor = persistence_required
-        ? 1
-        : std::min(
-              ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
-              target_unroll);
+    // Disable unrolling on iteration domain for now. TODO: Re-enable.
+    // unroll_factor = persistence_required
+    //     ? 1
+    //     : std::min(
+    //           ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
+    //           target_unroll);
+    unroll_factor = 1;
     if (unroll_factor > 1) {
       unroll_reduction = false;
     }
@@ -606,8 +611,59 @@ void schedulePersistentNormalization(
     Fusion* fusion,
     const ReductionParams& rparams) {
   FUSER_PERF_SCOPE("schedulePersistentNormalization");
-
   FusionGuard fg(fusion);
+
+  // Make sure we don't have global memory set on intermediate tensors from
+  // fusion segmentation
+  for (auto tv : scheduler_utils::allTvs(fusion)) {
+    if (tv->isFusionInput() || tv->isFusionOutput()) {
+      tv->setMemoryType(MemoryType::Global);
+    } else {
+      tv->setMemoryType(MemoryType::Local);
+    }
+  }
+
+  // Cache tensors before grabbing any references to reductions as cache_before
+  // can invalidate the references since when applied to a reduction tensor view
+  // the new tensor view contains the reduction and original doesn't.
+
+  // Make sure we don't make a cache of an input that would turn it into a
+  // persistent buffer. This gave invalid code.
+  std::vector<TensorView*> cached_inputs;
+  // If we're going to unroll, make a cache of the inputs
+  if (rparams.loop_unroll > 1) {
+    auto persistent_buffers =
+        scheduler_utils::persistentBuffers(fusion).buffers;
+    auto producers_for_persistence =
+        scheduler_utils::producerTvsOf(persistent_buffers);
+
+    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
+    for (auto tv : in_tvs) {
+      if (tv->uses().empty()) {
+        continue;
+      }
+      auto cached_tv = tv->cache_after();
+      cached_inputs.emplace_back(cached_tv);
+    }
+  }
+
+  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
+  // For intermediate outputs, apply cache_fork
+  for (const auto output :
+       ir_utils::filterByType<TensorView>(fusion->outputs())) {
+    if (output->definition() == nullptr) {
+      continue;
+    }
+    if (!output->uses().empty()) {
+      if (output->getValType().value() == ValType::TensorView) {
+        auto cached_output = output->as<TensorView>()->cache_fork();
+        cached_outputs.push_back(std::make_pair(output, cached_output));
+      }
+    } else if (rparams.loop_unroll > 1) {
+      auto cached_output = output->as<TensorView>()->cache_before();
+      cached_outputs.push_back(std::make_pair(cached_output, output));
+    }
+  }
 
   std::vector<TensorView*> reduction_tvs;
   for (auto tv : scheduler_utils::allTvs(fusion)) {
@@ -644,55 +700,6 @@ void schedulePersistentNormalization(
     TORCH_INTERNAL_ASSERT(
         rparams.fastest_dim,
         "If all dims are reduction, should be sending it to fastest dim scheduler.");
-  }
-
-  // Make sure we don't have global memory set on intermediate tensors from
-  // fusion segmentation
-  for (auto tv : scheduler_utils::allTvs(fusion)) {
-    if (tv->isFusionInput() || tv->isFusionOutput()) {
-      tv->setMemoryType(MemoryType::Global);
-    } else {
-      tv->setMemoryType(MemoryType::Local);
-    }
-  }
-
-  // Make sure we don't make a cache of an input that would turn it into a
-  // persistent buffer. This gave invalid code.
-  std::vector<TensorView*> cached_inputs;
-  // If we're going to unroll, make a cache of the inputs
-  if (rparams.loop_unroll > 1) {
-    auto persistent_buffers =
-        scheduler_utils::persistentBuffers(fusion).buffers;
-    auto producers_for_persistence =
-        scheduler_utils::producerTvsOf(persistent_buffers);
-
-    // Don't cache inputs that are not producers of the reductions, they could
-    // have a different pattern than the reduction and we don't want to use them
-    // to computeWithOutputs
-    auto inputs_to_reduction_vec = scheduler_utils::inputTvsOf(reduction_tvs);
-    std::unordered_set<TensorView*> inputs_to_reductions_set(
-        inputs_to_reduction_vec.begin(), inputs_to_reduction_vec.end());
-
-    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
-    for (auto tv : in_tvs) {
-      auto cached_tv = tv->cache_after();
-      cached_inputs.emplace_back(cached_tv);
-    }
-  }
-
-  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
-  // For intermediate outputs, apply cache_fork
-  for (const auto output :
-       ir_utils::filterByType<TensorView>(fusion->outputs())) {
-    if (!output->uses().empty()) {
-      if (output->getValType().value() == ValType::TensorView) {
-        auto cached_output = output->as<TensorView>()->cache_fork();
-        cached_outputs.push_back(std::make_pair(output, cached_output));
-      }
-    } else if (rparams.loop_unroll > 1) {
-      auto cached_output = output->as<TensorView>()->cache_before();
-      cached_outputs.push_back(std::make_pair(cached_output, output));
-    }
   }
 
   std::vector<int> rfactor_axes;
@@ -1092,6 +1099,58 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
 
   FusionGuard fg(fusion);
 
+  // Make sure we don't have global memory set on intermediate tensors from
+  // fusion segmentation
+  for (auto tv : scheduler_utils::allTvs(fusion)) {
+    if (tv->isFusionInput() || tv->isFusionOutput()) {
+      tv->setMemoryType(MemoryType::Global);
+    } else {
+      tv->setMemoryType(MemoryType::Local);
+    }
+  }
+
+  // Cache tensors before grabbing any references to reductions as cache_before
+  // can invalidate the references since when applied to a reduction tensor view
+  // the new tensor view contains the reduction and original doesn't.
+
+  // Make sure we don't make a cache of an input that would turn it into a
+  // persistent buffer. This gave invalid code.
+  std::vector<TensorView*> cached_inputs;
+  // If we're going to unroll, make a cache of the inputs
+  if (rparams.loop_unroll > 1) {
+    auto persistent_buffers =
+        scheduler_utils::persistentBuffers(fusion).buffers;
+    auto producers_for_persistence =
+        scheduler_utils::producerTvsOf(persistent_buffers);
+
+    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
+    for (auto tv : in_tvs) {
+      if (tv->uses().empty()) {
+        continue;
+      }
+      auto cached_tv = tv->cache_after();
+      cached_inputs.emplace_back(cached_tv);
+    }
+  }
+
+  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
+  // For intermediate outputs, apply cache_fork
+  for (const auto output :
+       ir_utils::filterByType<TensorView>(fusion->outputs())) {
+    if (output->definition() == nullptr) {
+      continue;
+    }
+    if (!output->uses().empty()) {
+      if (output->getValType().value() == ValType::TensorView) {
+        auto cached_output = output->as<TensorView>()->cache_fork();
+        cached_outputs.push_back(std::make_pair(output, cached_output));
+      }
+    } else if (rparams.loop_unroll > 1) {
+      auto cached_output = output->as<TensorView>()->cache_before();
+      cached_outputs.push_back(std::make_pair(cached_output, output));
+    }
+  }
+
   std::vector<TensorView*> reduction_tvs;
   for (auto tv : scheduler_utils::allTvs(fusion)) {
     if (tv->hasReduction() && !fusion->hasInput(tv)) {
@@ -1127,61 +1186,6 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
     TORCH_INTERNAL_ASSERT(
         rparams.fastest_dim,
         "If all dims are reduction, should be sending it to fastest dim scheduler.");
-  }
-
-  // Make sure we don't have global memory set on intermediate tensors from
-  // fusion segmentation
-  for (auto tv : scheduler_utils::allTvs(fusion)) {
-    if (tv->isFusionInput() || tv->isFusionOutput()) {
-      tv->setMemoryType(MemoryType::Global);
-    } else {
-      tv->setMemoryType(MemoryType::Local);
-    }
-  }
-
-  // Make sure we don't make a cache of an input that would turn it into a
-  // persistent buffer. This gave invalid code.
-  std::vector<TensorView*> cached_inputs;
-  // Inputs to post normalization section of the code. We don't want these
-  // tensors to computeWith their outputs as that could attempt to change them
-  std::unordered_set<TensorView*> post_norm_inputs;
-  // If we're going to unroll, make a cache of the inputs
-  if (rparams.loop_unroll > 1) {
-    auto persistent_buffers =
-        scheduler_utils::persistentBuffers(fusion).buffers;
-    auto producers_for_persistence =
-        scheduler_utils::producerTvsOf(persistent_buffers);
-
-    // Don't cache inputs that are not producers of the reductions, they could
-    // have a different pattern than the reduction and we don't want to use them
-    // to computeWithOutputs
-    auto inputs_to_reduction_vec = scheduler_utils::inputTvsOf(reduction_tvs);
-    std::unordered_set<TensorView*> inputs_to_reductions_set(
-        inputs_to_reduction_vec.begin(), inputs_to_reduction_vec.end());
-
-    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
-    for (auto tv : in_tvs) {
-      auto cached_tv = tv->cache_after();
-      cached_inputs.emplace_back(cached_tv);
-      if (!inputs_to_reductions_set.count(tv)) {
-        post_norm_inputs.emplace(cached_tv);
-      }
-    }
-  }
-
-  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
-  // For intermediate outputs, apply cache_fork
-  for (const auto output :
-       ir_utils::filterByType<TensorView>(fusion->outputs())) {
-    if (!output->uses().empty()) {
-      if (output->getValType().value() == ValType::TensorView) {
-        auto cached_output = output->as<TensorView>()->cache_fork();
-        cached_outputs.push_back(std::make_pair(output, cached_output));
-      }
-    } else if (rparams.loop_unroll > 1) {
-      auto cached_output = output->as<TensorView>()->cache_before();
-      cached_outputs.push_back(std::make_pair(cached_output, output));
-    }
   }
 
   std::vector<int> rfactor_axes;
@@ -1464,8 +1468,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
             "Expected reduction axis in ",
             rfactor_tv);
         auto pos = std::distance(rfactor_tv_dom.begin(), reduction_it);
-        rfactor_tv->computeWith(
-            reduction_tvs[i], pos, ComputeAtMode::Standard);
+        rfactor_tv->computeWith(reduction_tvs[i], pos, ComputeAtMode::Standard);
       } else {
         rfactor_tvs[i]->computeWith(
             reduction_tvs[i], -1, ComputeAtMode::BestEffort);
@@ -1518,8 +1521,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
           ? -1
           : std::distance(output->domain()->domain().begin(), unroll_it) + 1;
 
-      cached_output->computeAt(
-          output, unroll_pos, ComputeAtMode::BestEffort);
+      cached_output->computeAt(output, unroll_pos, ComputeAtMode::BestEffort);
 
       compute_to.push_back(cached_output);
       keep_unrolled.emplace(output);
