@@ -166,7 +166,7 @@ ReductionParams innerNormalizationHeuristic(
 
   // Adjust blocking and setup unrolling
   // Disable unrolling on iteration domain for now. TODO: Re-enable.
-  if (remainder_in_reduction == 1 && false) {
+  if (remainder_in_reduction == 1 && !persistence_required) {
     // Small number of reduction elements, don't try to unroll the reduction dim
     unroll_reduction = false;
     // Try unrolling output dimension
@@ -189,7 +189,7 @@ ReductionParams innerNormalizationHeuristic(
     unroll_factor = std::min(remainder_in_reduction, target_unroll);
 
     // Disable unrolling on iteration domain for now. TODO: Re-enable.
-    if (unroll_factor == 1 && false) {
+    if (unroll_factor == 1 && !persistence_required) {
       // If we can't unroll reduction dim, unroll output dim
       unroll_reduction = false;
       unroll_factor = std::min(remainder_in_output, target_unroll);
@@ -413,13 +413,13 @@ ReductionParams OuterNormalizationHeuristic(
     // TODO: Check if reduction schedulers actually benefit from this, only
     // considered persistent kernels which have difficulty inlining intermediate
     // values so register space can blow up.
-    // Disable unrolling on iteration domain for now. TODO: Re-enable.
-    // unroll_factor = persistence_required
-    //     ? 1
-    //     : std::min(
-    //           ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
-    //           target_unroll);
-    unroll_factor = 1;
+    // Disable unrolling on iteration domain for now.
+    unroll_factor = persistence_required
+        ? 1
+        : std::min(
+              ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
+              target_unroll);
+
     if (unroll_factor > 1) {
       unroll_reduction = false;
     }
@@ -1096,7 +1096,6 @@ void schedulePersistentNormalization(
 // implementations.
 void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   FUSER_PERF_SCOPE("scheduleMultiReduction");
-
   FusionGuard fg(fusion);
 
   // Make sure we don't have global memory set on intermediate tensors from
@@ -1114,7 +1113,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   // the new tensor view contains the reduction and original doesn't.
 
   // Make sure we don't make a cache of an input that would turn it into a
-  // persistent buffer. This gave invalid code.
+  // persistent buffer.
   std::vector<TensorView*> cached_inputs;
   // If we're going to unroll, make a cache of the inputs
   if (rparams.loop_unroll > 1) {
@@ -1331,6 +1330,9 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Reduction Dimensions
         // rF-Leftover, r-TIDy, rf-Unswitch, rf-Unroll]
         // 2(-4)        3(-3)   4(-2)       5(-1)
+
+        // r-TIDy, rF-Leftover, rf-Unswitch, rf-Unroll]
+        // 2(-4)      3(-3)       4(-2)       5(-1)
         reduction_tv->split(1, rparams.loop_unroll);
         reduction_tv->split(1, 1);
         reduction_tv->split(1, NamedScalar::getParallelDim(ParallelType::TIDy));
@@ -1338,11 +1340,14 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Unswitch axis which gives us finer control on allocations with
         // unrolling
         reduction_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
-        rfactor_axes = {-4, -2, -1};
+
+        reduction_tv->reorder({{-4, -3}, {-3, -4}});
+
+        rfactor_axes = {-3, -2, -1};
         rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
 
         rfactor_tv->axis(-2)->parallelize(ParallelType::Unswitch);
-        rfactor_tv->axis(-3)->parallelize(ParallelType::TIDy);
+        rfactor_tv->axis(-4)->parallelize(ParallelType::TIDy);
         rfactor_tv->axis(1)->parallelize(ParallelType::TIDx);
         rfactor_tv->axis(0)->parallelize(ParallelType::BIDx);
       } else {
@@ -1404,18 +1409,19 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   scheduler_utils::parallelizeAllLike(
       reference_tv, scheduler_utils::allTvs(fusion));
 
-  // Tensors that are consumers of the reduction operations. These are safe to
-  // computeAt with.
+  // // Tensors that are consumers of the reduction operations. These are safe
+  // to
+  // // computeAt with.
 
-  std::unordered_set<TensorView*> reduction_consumers;
-  {
-    auto reduction_consumer_vals = DependencyCheck::getAllDependentVals(
-        {reduction_tvs.begin(), reduction_tvs.end()});
-    auto reduction_consumer_tvs =
-        ir_utils::filterByType<TensorView>(reduction_consumer_vals);
-    reduction_consumers = std::unordered_set<TensorView*>(
-        reduction_consumer_tvs.begin(), reduction_consumer_tvs.end());
-  }
+  // std::unordered_set<TensorView*> reduction_consumers;
+  // {
+  //   auto reduction_consumer_vals = DependencyCheck::getAllDependentVals(
+  //       {reduction_tvs.begin(), reduction_tvs.end()});
+  //   auto reduction_consumer_tvs =
+  //       ir_utils::filterByType<TensorView>(reduction_consumer_vals);
+  //   reduction_consumers = std::unordered_set<TensorView*>(
+  //       reduction_consumer_tvs.begin(), reduction_consumer_tvs.end());
+  // }
 
   if (rparams.loop_unroll > 1) {
     // Input to cached we want outside unswitched position
@@ -1424,14 +1430,11 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
 
     std::vector<TensorView*> compute_from;
 
-    // TODO: Convert back to unswitch detection
     // Schedule unrolling on inputs
     for (auto cached_input : cached_inputs) {
       auto consumers_of_input_cache =
           scheduler_utils::consumerTvsOf(cached_input);
       for (auto consumer : consumers_of_input_cache) {
-        // scheduler_utils::computeAtOutputs(
-        //     consumer, -1, reduction_consumers, ComputeAtMode::MostInlined);
         auto unroll_it = std::find_if(
             consumer->domain()->domain().begin(),
             consumer->domain()->domain().end(),

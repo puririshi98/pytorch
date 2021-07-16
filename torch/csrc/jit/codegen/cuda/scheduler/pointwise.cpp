@@ -324,6 +324,22 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   scheduler_utils::mergeNonReduction(reference_tv);
 
+  // std::cout<<reference_tv<<std::endl;
+  //   reference_tv->merge(1);
+
+  //   // [BIDx, TIDx, Unswitch, Vectorization]
+  //   reference_tv->split(1, params.inner_factor);
+  //   reference_tv->split(1, 1);
+  //   reference_tv->split(1, kThreadX);
+  //   reference_tv->split(1, 4);
+
+  // std::cout<<reference_tv<<std::endl;
+  //   reference_tv->axis(0)->parallelize(ParallelType::BIDy);
+  //   reference_tv->axis(1)->parallelize(ParallelType::BIDx);
+  //   reference_tv->axis(-3)->parallelize(ParallelType::TIDx);
+  //   reference_tv->axis(-2)->parallelize(ParallelType::Unswitch);
+  //   reference_tv->axis(-1)->parallelize(ParallelType::Vectorize);
+  // std::cout<<reference_tv<<std::endl;
   if (params.vectorize) {
     // Vectorize
     reference_tv->split(0, params.inner_factor);
@@ -451,6 +467,8 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   scheduler_utils::computeAtBetween(
       compute_from, compute_to, -1, ComputeAtMode::BestEffort);
+
+  // std::cout<<"End schedule pointwise"<<std::endl;
 }
 
 } // namespace cuda

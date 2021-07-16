@@ -632,8 +632,49 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
 void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
   FUSER_PERF_SCOPE("scheduleReduction");
   FusionGuard fg(fusion);
+  std::vector<TensorView*> cached_inputs;
+  // If we're going to unroll, make a cache of the inputs
+  if (rparams.loop_unroll > 1) {
+    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
+    for (auto tv : in_tvs) {
+      if (tv->uses().empty()) {
+        continue;
+      }
+      auto cached_tv = tv->cache_after();
+      cached_inputs.emplace_back(cached_tv);
+    }
+  }
+
+  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
+  // For intermediate outputs, apply cache_fork
+  for (const auto output :
+       ir_utils::filterByType<TensorView>(fusion->outputs())) {
+    if (output->definition() == nullptr) {
+      continue;
+    }
+    if (!output->uses().empty()) {
+      if (output->getValType().value() == ValType::TensorView) {
+        auto cached_output = output->as<TensorView>()->cache_fork();
+        cached_outputs.push_back(std::make_pair(output, cached_output));
+      }
+    } else if (rparams.loop_unroll > 1) {
+      auto cached_output = output->as<TensorView>()->cache_before();
+      cached_outputs.push_back(std::make_pair(cached_output, output));
+    }
+  }
 
   auto tvs = scheduler_utils::allTvs(fusion);
+
+  // Make sure we don't have global memory set on intermediate tensors from
+  // fusion segmentation
+  for (auto tv : tvs) {
+    if (tv->isFusionInput() || tv->isFusionOutput()) {
+      tv->setMemoryType(MemoryType::Global);
+    } else {
+      tv->setMemoryType(MemoryType::Local);
+    }
+  }
+
   TensorView* red_tv = nullptr;
   for (auto tv : tvs) {
     if (tv->hasReduction() && !fusion->hasInput(tv)) {
@@ -648,13 +689,37 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
     }
   }
 
-  // Make sure we don't have global memory set on intermediate tensors from
-  // fusion segmentation
+  std::unordered_set<IterDomain*> mapped_to_trivial_reduction;
   for (auto tv : tvs) {
-    if (tv->isFusionInput() || tv->isFusionOutput()) {
-      tv->setMemoryType(MemoryType::Global);
-    } else {
-      tv->setMemoryType(MemoryType::Local);
+    // root domain vs domain shouldn't matter as at this point we shouldn't have
+    // any transformations.
+    for (auto id : tv->getRootDomain()) {
+      if (id->isTrivialReduction()) {
+        mapped_to_trivial_reduction.emplace(id);
+      }
+    }
+  }
+
+  if (!mapped_to_trivial_reduction.empty()) {
+    // Shouldn't matter which compute at map we use
+    auto ca_index_map = ComputeAtMap(ComputeAtMap::MappingMode::INDEX);
+    ca_index_map.build(fusion);
+    // Make a copy we need to check mappings of all
+    auto trivial_ids = mapped_to_trivial_reduction;
+    for (auto tv : tvs) {
+      for (auto id : tv->getRootDomain()) {
+        if (!id->extent()->isOneInt()) {
+          continue;
+        }
+        if (std::any_of(
+                trivial_ids.begin(),
+                trivial_ids.end(),
+                [&ca_index_map, &id](IterDomain* trivial_id) {
+                  return ca_index_map.areMapped(id, trivial_id);
+                })) {
+          mapped_to_trivial_reduction.emplace(id);
+        }
+      }
     }
   }
 
@@ -668,44 +733,48 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
   TensorView* reduction_tv = nullptr;
 
   // We coalesce all reduction axes to the right;
-  scheduler_utils::mergeReduction(red_tv);
+  scheduler_utils::mergeReduction(red_tv, mapped_to_trivial_reduction);
 
+  bool has_iter_axis = false;
   // Merge all iteration dimensions
   if (red_tv->domain()->domain().size() > 1) {
-    scheduler_utils::mergeNonReduction(red_tv);
+    has_iter_axis = scheduler_utils::mergeNonReduction(
+                        red_tv, mapped_to_trivial_reduction) > 0;
   }
 
   // Evaluate Dimensions of Reduction TensorView
   auto red_ids = red_tv->domain()->domain();
 
+  // Must contain at least [reduction], can contain up to [iteration, reduction,
+  // trivial reduction]
   TORCH_INTERNAL_ASSERT(
-      red_ids.size() == 1 || red_ids.size() == 2,
-      "Error coalesing dimensions.");
+      std::count_if(
+          red_ids.begin(),
+          red_ids.end(),
+          [&mapped_to_trivial_reduction](IterDomain* id) {
+            return id->isReduction() && !mapped_to_trivial_reduction.count(id);
+          }) == 1 &&
+          std::count_if(
+              red_ids.begin(),
+              red_ids.end(),
+              [&mapped_to_trivial_reduction](IterDomain* id) {
+                return !id->isReduction() &&
+                    !mapped_to_trivial_reduction.count(id);
+              }) <= 1,
+      red_tv,
+      "  Error coalesing dimensions.");
 
-  if (red_ids.size() == 1) {
+  if (!has_iter_axis) {
     TORCH_INTERNAL_ASSERT(
         rparams.fastest_dim,
         "If all dims are reduction, should be sending it to fastest dim scheduler.");
   }
 
-  std::vector<TensorView*> cached_inputs;
-  // If we're going to unroll, make a cache of the inputs
-  if (rparams.loop_unroll > 1) {
-    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
-    for (auto tv : in_tvs) {
-      if (tv->uses().empty()) {
-        continue;
-      }
-      auto cached_tv = tv->cache_after();
-      cached_inputs.emplace_back(cached_tv);
-    }
-  }
-
   // Scheduling the Reduction
   if (rparams.fastest_dim) {
-    const bool has_iter_axis = red_ids.size() == 2;
+    // Adjust for trivial broadcast
     const int iter_axis = 0;
-    const int reduce_axis = red_ids.size() == 2 ? 1 : 0;
+    const int reduce_axis = has_iter_axis ? 1 : 0;
 
     // Do multiple reductions per block
     if (rparams.multiple_reds_per_blk) {
@@ -717,7 +786,10 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         //
         //  Reduction Dimensions
         //  rF-Remain, rf-Unswitch, rf-Unroll, X-TIDx]
-        //  2 (-4)     3 (-3)       4 (-2)     5 (-1)
+        //  2(r)          3(r+1)     4(r+2)    5(r+3)
+
+        //  X-TIDx, rF-leftover, rf-Unswitch, rf-Unroll]
+        //   2(r)      3(r+1)       4(r+2)      5(r+3)
 
         red_tv->split(
             reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
@@ -726,10 +798,17 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // unrolling
         red_tv->split(reduce_axis, 1);
 
-        auto red_tv_rf = scheduler_utils::rfactorHelper(red_tv, {-4, -3, -2});
+        red_tv->reorder(
+            {{reduce_axis + 3, reduce_axis},
+             {reduce_axis, reduce_axis + 1},
+             {reduce_axis + 1, reduce_axis + 2},
+             {reduce_axis + 2, reduce_axis + 3}});
 
-        red_tv_rf->axis(-1)->parallelize(ParallelType::TIDx);
-        red_tv_rf->axis(-3)->parallelize(ParallelType::Unswitch);
+        auto red_tv_rf = scheduler_utils::rfactorHelper(
+            red_tv, {reduce_axis + 1, reduce_axis + 2, reduce_axis + 3});
+
+        red_tv_rf->axis(reduce_axis)->parallelize(ParallelType::TIDx);
+        red_tv_rf->axis(reduce_axis + 2)->parallelize(ParallelType::Unswitch);
 
         if (has_iter_axis) {
           red_tv_rf->split(
@@ -759,7 +838,7 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         red_tv->split(
             reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
 
-        auto red_tv_rf = scheduler_utils::rfactorHelper(red_tv, {-2});
+        auto red_tv_rf = scheduler_utils::rfactorHelper(red_tv, {reduce_axis});
         red_tv_rf->axis(-1)->parallelize(ParallelType::TIDx);
 
         if (has_iter_axis) {
@@ -793,9 +872,14 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Fastest dim, cross grid, cross block
         //      [outputs,
         // Idx:     0
-        //   | rf-Remain, r-BIDx, r-TIDy, r-Unswitch, rf-Unroll, r-TIDx]
+        //   | rf-Remain, r-BIDx, r-TIDy, rf-Unswitch, rf-Unroll, r-TIDx]
         //     1(-6)      2(-5)   3(-4)   4(-3)       5(-2)      6(-1)|
         //                Reduction Dimensions
+
+        //   | r-BIDx, r-TIDy, r-TIDx, rf-Remain, rf-Unswitch, rf-Unroll]
+        //     1(-6)    2(-5)   3(-4)     4(-3)       5(-2)      6(-1)|
+        //                Reduction Dimensions
+
         red_tv->split(
             reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
         red_tv->split(reduce_axis, rparams.loop_unroll);
@@ -810,13 +894,22 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Clang tidy
         constexpr int kNegFive = -5;
         constexpr int kNegSix = -6;
-        auto red_tv_rf =
-            scheduler_utils::rfactorHelper(red_tv, {kNegSix, -3, -2});
 
-        red_tv_rf->axis(-1)->parallelize(ParallelType::TIDx);
-        red_tv_rf->axis(-3)->parallelize(ParallelType::Unswitch);
-        red_tv_rf->axis(-4)->parallelize(ParallelType::TIDy);
-        red_tv_rf->axis(kNegFive)->parallelize(ParallelType::BIDx);
+        red_tv->reorder(
+            {{reduce_axis, reduce_axis + 3},
+             {reduce_axis + 1, reduce_axis},
+             {reduce_axis + 2, reduce_axis + 1},
+             {reduce_axis + 3, reduce_axis + 4},
+             {reduce_axis + 4, reduce_axis + 5},
+             {reduce_axis + 5, reduce_axis + 2}});
+
+        auto red_tv_rf = scheduler_utils::rfactorHelper(
+            red_tv, {reduce_axis + 3, reduce_axis + 4, reduce_axis + 5});
+
+        red_tv_rf->axis(reduce_axis + 4)->parallelize(ParallelType::Unswitch);
+        red_tv_rf->axis(reduce_axis + 2)->parallelize(ParallelType::TIDx);
+        red_tv_rf->axis(reduce_axis + 1)->parallelize(ParallelType::TIDy);
+        red_tv_rf->axis(reduce_axis)->parallelize(ParallelType::BIDx);
 
         if (has_iter_axis) {
           if (rparams.split_grid_dim) {
@@ -839,6 +932,9 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Reduction Dimensions
         // rF-Remain, rf-Unswitch, rf-Unroll, r-TIDx]
         // 1(-4)      2(-3)        3(-2)      4(-1)
+
+        //  X-TIDx, rF-Leftover, rf-Unswitch, rf-Unroll]
+        //  1 (-4)  2 (-3)         3 (-2)       4 (-1)
         red_tv->split(
             reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
         red_tv->split(reduce_axis, rparams.loop_unroll);
@@ -846,10 +942,17 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // unrolling
         red_tv->split(reduce_axis, 1);
 
-        auto red_tv_rf = scheduler_utils::rfactorHelper(red_tv, {-4, -3, -2});
+        red_tv->reorder(
+            {{reduce_axis + 3, reduce_axis},
+             {reduce_axis, reduce_axis + 1},
+             {reduce_axis + 1, reduce_axis + 2},
+             {reduce_axis + 2, reduce_axis + 3}});
 
-        red_tv_rf->axis(-1)->parallelize(ParallelType::TIDx);
-        red_tv_rf->axis(-3)->parallelize(ParallelType::Unswitch);
+        auto red_tv_rf = scheduler_utils::rfactorHelper(
+            red_tv, {reduce_axis + 1, reduce_axis + 2, reduce_axis + 3});
+
+        red_tv_rf->axis(reduce_axis)->parallelize(ParallelType::TIDx);
+        red_tv_rf->axis(reduce_axis + 2)->parallelize(ParallelType::Unswitch);
 
         if (has_iter_axis) {
           if (rparams.split_grid_dim) {
@@ -879,6 +982,10 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Reduction Dimensions
         // rF-Leftover, r-BIDy, r-TIDy, rf-Unswitch, rf-Unroll]
         // 2(-5)        3(-4)   4(-3)   5(-2)        6(-1)
+
+        // r-BIDy, r-TIDy, rF-Leftover, rf-Unswitch, rf-Unroll]
+        // 2(-5)    3(-4)      4(-3)       5(-2)        6(-1)
+
         red_tv->split(1, rparams.loop_unroll);
         // Unswitch axis which gives us finer control on allocations with
         // unrolling
@@ -888,13 +995,14 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
 
         red_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
 
-        auto red_tv_rf = scheduler_utils::rfactorHelper(
-            red_tv,
-            {-5, -2, -1}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+        red_tv->reorder({{2, 4}, {3, 2}, {4, 3}});
 
-        red_tv_rf->axis(-2)->parallelize(ParallelType::Unswitch);
-        red_tv_rf->axis(-3)->parallelize(ParallelType::TIDy);
-        red_tv_rf->axis(-4)->parallelize(ParallelType::BIDy);
+        auto red_tv_rf = scheduler_utils::rfactorHelper(
+            red_tv, {4, 5, 6}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+
+        red_tv_rf->axis(5)->parallelize(ParallelType::Unswitch);
+        red_tv_rf->axis(3)->parallelize(ParallelType::TIDy);
+        red_tv_rf->axis(2)->parallelize(ParallelType::BIDy);
         red_tv_rf->axis(1)->parallelize(ParallelType::TIDx);
         red_tv_rf->axis(0)->parallelize(ParallelType::BIDx);
 
@@ -913,6 +1021,9 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
           // Reduction Dimensions
           // rF-Leftover, r-TIDy, rf-Unswitch, rf-Unroll]
           // 2(-4)        3(-3)   4(-2)       5(-1)
+
+          // r-TIDy, rF-Leftover, rf-Unswitch, rf-Unroll]
+          // 2(-4)      3(-3)       4(-2)       5(-1)
           red_tv->split(1, rparams.loop_unroll);
           // Unswitch axis which gives us finer control on allocations with
           // unrolling
@@ -920,12 +1031,14 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
           red_tv->split(1, NamedScalar::getParallelDim(ParallelType::TIDy));
           red_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
 
+          red_tv->reorder({{2, 3}, {3, 2}});
+
           auto red_tv_rf = scheduler_utils::rfactorHelper(
               red_tv,
-              {-4, -2, -1}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+              {3, 4, 5}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
-          red_tv_rf->axis(-2)->parallelize(ParallelType::Unswitch);
-          red_tv_rf->axis(-3)->parallelize(ParallelType::TIDy);
+          red_tv_rf->axis(4)->parallelize(ParallelType::Unswitch);
+          red_tv_rf->axis(2)->parallelize(ParallelType::TIDy);
           red_tv_rf->axis(1)->parallelize(ParallelType::TIDx);
           red_tv_rf->axis(0)->parallelize(ParallelType::BIDx);
 
@@ -943,6 +1056,13 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
           // rF-Leftover, r-TIDy]
           // 4(-2)        5(-1)
 
+          // The unroll/unswitch dimension needs to be within the rF-Leftover
+          // dimension
+          //    [x-BIDx, x-Unswitch, x-Unroll, x-TIDx, rF-Leftover, r-TIDy]
+          //      0(-6)     1(-5)      2(-4)    3(-3)     4(-2)      5(-1)
+          // -> [x-BIDx, x-TIDx, rF-Leftover, x-Unswitch, x-Unroll, r-TIDy]
+          //      0(-6)   1(-5)     2(-4)        3(-3)      4(-2)    5(-1)
+
           red_tv->split(1, NamedScalar::getParallelDim(ParallelType::TIDy));
           red_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
           red_tv->split(0, rparams.loop_unroll);
@@ -950,15 +1070,15 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
           // unrolling
           red_tv->split(0, 1);
 
+          red_tv->reorder({{1, 3}, {2, 4}, {3, 1}, {4, 2}});
+
           auto red_tv_rf = scheduler_utils::rfactorHelper(
-              red_tv, {-2}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+              red_tv, {2}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
-          red_tv_rf->axis(-1)->parallelize(ParallelType::TIDy);
-          red_tv_rf->axis(3)->parallelize(ParallelType::TIDx);
-          red_tv_rf->axis(1)->parallelize(ParallelType::Unswitch);
+          red_tv_rf->axis(5)->parallelize(ParallelType::TIDy);
+          red_tv_rf->axis(1)->parallelize(ParallelType::TIDx);
+          red_tv_rf->axis(3)->parallelize(ParallelType::Unswitch);
           red_tv_rf->axis(0)->parallelize(ParallelType::BIDx);
-
-          red_tv_rf->reorder({{-2, 0}});
 
           reference_tv = red_tv_rf;
           reduction_tv = red_tv;
@@ -980,7 +1100,7 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         red_tv->split(1, 1);
         red_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
 
-        auto red_tv_rf = scheduler_utils::rfactorHelper(red_tv, {-3, -2});
+        auto red_tv_rf = scheduler_utils::rfactorHelper(red_tv, {2, 3});
 
         red_tv_rf->axis(0)->parallelize(ParallelType::BIDx);
         red_tv_rf->axis(1)->parallelize(ParallelType::TIDx);
@@ -997,14 +1117,22 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
         // Reduction Dimensions
         // r-Leftover]
         // 4(-1)
+
+        // The unroll/unswitch dimension needs to be within the rF-Leftover
+        // dimension
+
         red_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
         red_tv->split(0, rparams.loop_unroll);
         red_tv->split(0, 1);
 
+        // [x-BIDx, x-Unswitch, x-Unroll, x-TIDx, r-Leftover]
+        //   0(-5)     1(-4)      2(-3)    3(-2)     4(-1)
+
+        // [x-BIDx, x-TIDx, r-Leftover, x-Unswitch, x-Unroll]
+        //   0(-5)   1(-4)     2(-3)       3(-2)      4(-1)
         red_tv->axis(0)->parallelize(ParallelType::BIDx);
-        red_tv->axis(1)->parallelize(ParallelType::Unswitch);
-        red_tv->axis(3)->parallelize(ParallelType::TIDx);
-        red_tv->reorder({{-1, 0}});
+        red_tv->axis(3)->parallelize(ParallelType::Unswitch);
+        red_tv->axis(1)->parallelize(ParallelType::TIDx);
 
         reference_tv = red_tv;
         reduction_tv = red_tv;
@@ -1023,73 +1151,129 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
       reference_tv, scheduler_utils::allTvs(fusion));
 
   if (rparams.loop_unroll > 1) {
-    // Schedule unrolling on inputs
-
-    // Inline rfactor into reduction
-    if (reference_tv != reduction_tv) {
-      reference_tv->computeWith(reduction_tv, -1, ComputeAtMode::BestEffort);
-    }
-
-    // Find unswitch position
-    int unswitch_axis = -1;
-    for (int i = 0; i < (int)reference_tv->nDims(); i++) {
-      if (reference_tv->axis(i)->getParallelType() == ParallelType::Unswitch) {
-        unswitch_axis = i;
-      }
-    }
-
-    unswitch_axis++;
-    // Input to cahced_input we want outside unswitched position
+    // Input to cached we want outside unswitched position
     // Cached input to rfactor we want inlined
+    std::unordered_set<TensorView*> keep_unrolled;
+
+    std::vector<TensorView*> compute_from;
+
+    // Schedule unrolling on inputs
     for (auto cached_input : cached_inputs) {
       auto consumers_of_input_cache =
           scheduler_utils::consumerTvsOf(cached_input);
       for (auto consumer : consumers_of_input_cache) {
-        if (consumer != reference_tv) {
-          // consumer->computeAt(reference_tv, -1, ComputeAtMode::MostInlined);
-          scheduler_utils::computeWithOutputs(
-              consumer, -1, ComputeAtMode::MostInlined);
-        }
-        // TODO: Re-evaluate this based on SegmentReducePointwise, and other
-        // more complex reduction fusions
+        auto unroll_it = std::find_if(
+            consumer->domain()->domain().begin(),
+            consumer->domain()->domain().end(),
+            [&mapped_to_trivial_reduction](IterDomain* id) {
+              return id->getParallelType() == ParallelType::Unswitch ||
+                  mapped_to_trivial_reduction.count(id);
+            });
+
+        auto unroll_pos = unroll_it == consumer->domain()->domain().end()
+            ? -1
+            : std::distance(consumer->domain()->domain().begin(), unroll_it) +
+                1;
         cached_input->computeAt(
-            consumer, unswitch_axis, ComputeAtMode::BestEffort);
+            consumer, unroll_pos, ComputeAtMode::BestEffort);
+        compute_from.push_back(consumer);
+        keep_unrolled.emplace(cached_input);
       }
     }
 
-    scheduler_utils::computeWithOutputs(
-        reduction_tv, -1, ComputeAtMode::MostInlined);
+    auto pos_it = std::find_if(
+        reference_tv->domain()->domain().begin(),
+        reference_tv->domain()->domain().end(),
+        [&mapped_to_trivial_reduction](IterDomain* id) {
+          return mapped_to_trivial_reduction.count(id);
+        });
 
-    // Nasty gotcha which we don't have a better mechanism to fix yet
-    if (
-        // Have an unswitch in the reduction
-        std::any_of(
-            reduction_tv->domain()->domain().begin(),
-            reduction_tv->domain()->domain().end(),
-            [](IterDomain* id) {
-              return id->getParallelType() == ParallelType::Unswitch;
-            }) &&
-        // Have a parallelized reduction
-        std::any_of(
-            reduction_tv->domain()->domain().begin(),
-            reduction_tv->domain()->domain().end(),
-            [](IterDomain* id) {
-              return id->isReduction() && id->isThread();
-            })) {
-      // If we leave unswitch on we could get a predicate around block/grid
-      // reduce which produces wrong result.
-      auto vals_post_reduction = DependencyCheck::getAllUseChains(red_tv);
-      for (const auto& chain : vals_post_reduction) {
-        auto tvs_post_reduction = ir_utils::filterByType<TensorView>(chain);
-        for (auto tv : tvs_post_reduction) {
-          for (auto id : tv->domain()->domain()) {
-            if (id->getParallelType() == ParallelType::Unswitch) {
-              id->parallelize(ParallelType::Serial);
-            }
-          }
-        }
+    auto pos = pos_it == reference_tv->domain()->domain().end()
+        ? -1
+        : std::distance(reference_tv->domain()->domain().begin(), pos_it) + 1;
+
+    // Compute at inputs to rfactor dimensions
+    scheduler_utils::computeAtBetween(
+        compute_from, {reference_tv}, pos, ComputeAtMode::MostInlined);
+
+    // Inline rfactor into reduction
+    if (reference_tv != reduction_tv) {
+      // Compute at rfactor into following reduction, keep outside first
+      // reduction
+      // iter domain in the rfactor tensor view
+      if (!rparams.reduction_unroll) {
+        auto rfactor_tv_dom = reference_tv->domain()->domain();
+        auto reduction_it = std::find_if(
+            rfactor_tv_dom.begin(), rfactor_tv_dom.end(), [](IterDomain* id) {
+              return id->isReduction();
+            });
+        TORCH_INTERNAL_ASSERT(
+            reduction_it != rfactor_tv_dom.end(),
+            "Expected reduction axis in ",
+            reference_tv);
+        auto pos = std::distance(rfactor_tv_dom.begin(), reduction_it);
+        reference_tv->computeWith(reduction_tv, pos, ComputeAtMode::Standard);
+      } else {
+        reference_tv->computeWith(reduction_tv, -1, ComputeAtMode::BestEffort);
       }
     }
+
+    // Remove anything before a reduction from compute_from
+    {
+      auto producers_of_reductions = DependencyCheck::getAllValsBetween(
+          {fusion->inputs().begin(), fusion->inputs().end()}, {reduction_tv});
+
+      auto producer_tvs_of_reduction =
+          ir_utils::filterByType<TensorView>(producers_of_reductions);
+      auto compute_from_cleaned = compute_from.erase(
+          std::remove_if(
+              compute_from.begin(),
+              compute_from.end(),
+              [&producer_tvs_of_reduction](TensorView* compute_from_tv) {
+                return std::find(
+                           producer_tvs_of_reduction.begin(),
+                           producer_tvs_of_reduction.end(),
+                           compute_from_tv) != producer_tvs_of_reduction.end();
+              }),
+          compute_from.end());
+    }
+
+    compute_from.push_back(reduction_tv);
+
+    std::vector<TensorView*> compute_to;
+    for (auto cached_output_pair : cached_outputs) {
+      auto cached_output = cached_output_pair.first;
+      auto output = cached_output_pair.second;
+
+      // If an output has multiple uses, it should already have computeAt set,
+      // don't intefere.
+      if (cached_output->uses().size() > 1) {
+        continue;
+      }
+
+      auto unroll_it = std::find_if(
+          output->domain()->domain().begin(),
+          output->domain()->domain().end(),
+          [&mapped_to_trivial_reduction](IterDomain* id) {
+            return id->getParallelType() == ParallelType::Unswitch ||
+                mapped_to_trivial_reduction.count(id);
+          });
+      auto unroll_pos = unroll_it == output->domain()->domain().end()
+          ? -1
+          : std::distance(output->domain()->domain().begin(), unroll_it) + 1;
+
+      cached_output->computeAt(output, unroll_pos, ComputeAtMode::BestEffort);
+
+      compute_to.push_back(cached_output);
+      keep_unrolled.emplace(output);
+    }
+
+    scheduler_utils::computeAtBetween(
+        compute_from,
+        compute_to,
+        -1,
+        ComputeAtMode::BestEffort,
+        mapped_to_trivial_reduction);
   } else {
     // Want to inline, especially backwards based on reduction_tv, otherwise
     // rfactor tv may not be inlined correctly

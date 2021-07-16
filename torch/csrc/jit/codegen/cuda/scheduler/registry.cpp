@@ -607,7 +607,10 @@ class SingleReductionScheduler : public SchedulerEntry {
     auto dependent_vals = DependencyCheck::getAllDependentVals({red_tv});
     for (auto val : dependent_vals) {
       if (val->definition()->isA<BroadcastOp>() && !val->uses().empty()) {
+        // fusion->printMath();
+        // TORCH_INTERNAL_ASSERT(false, "Should have been caught before.");
         return false;
+        // fusion->printMath();
       }
     }
 
@@ -671,14 +674,14 @@ class NormalizationScheduler : public SchedulerEntry {
 
   static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
     // auto & expr_evaluator = runtime_info.expressionEvaluator();
-    std::vector<TensorView*> reduction_tv;
+    std::vector<TensorView*> reduction_tvs;
     for (auto tv : scheduler_utils::allTvs(fusion)) {
       if (tv->hasReduction() && !fusion->hasInput(tv)) {
-        reduction_tv.push_back(tv);
+        reduction_tvs.push_back(tv);
       }
     }
 
-    if (reduction_tv.size() == 0) {
+    if (reduction_tvs.size() == 0) {
       // Use single reduction or pointwise logic
       return false;
     }
@@ -702,7 +705,7 @@ class NormalizationScheduler : public SchedulerEntry {
       return count;
     };
 
-    for (auto red : reduction_tv) {
+    for (auto red : reduction_tvs) {
       if (!valid_axis_count) {
         valid_axis_count = true;
         axis_count = reduction_root_size(red);
@@ -719,17 +722,32 @@ class NormalizationScheduler : public SchedulerEntry {
     root_map.build(true);
 
     // red_ops.size()>1 checked before
-    for (size_t it = 1; it < reduction_tv.size(); it++) {
-      if (!checkEquivalence(reduction_tv[it - 1], reduction_tv[it], root_map)) {
+    for (size_t it = 1; it < reduction_tvs.size(); it++) {
+      if (!checkEquivalence(
+              reduction_tvs[it - 1], reduction_tvs[it], root_map)) {
         return false;
       }
     }
 
-    if (scheduler_utils::persistentBufferSize(
-            fusion, runtime_info.expressionEvaluator()) *
-            4 >
-        scheduler_utils::registerFileSize() * 3) {
+    auto persistent_buffer_size = scheduler_utils::persistentBufferSize(
+        fusion, runtime_info.expressionEvaluator());
+    if (persistent_buffer_size * 4 > scheduler_utils::registerFileSize() * 3) {
       return false;
+    }
+
+    // Multi reduction scheduler has the same limitations as single reduction
+    // scheduler here
+    if (persistent_buffer_size <= 1) {
+      if (SchedulerTopologyChecker::hasPostReductionBCast(fusion)) {
+        return false;
+      }
+      auto dependent_vals = DependencyCheck::getAllDependentVals(
+          {reduction_tvs.begin(), reduction_tvs.end()});
+      for (auto val : dependent_vals) {
+        if (val->definition()->isA<BroadcastOp>() && !val->uses().empty()) {
+          return false;
+        }
+      }
     }
 
     return true;

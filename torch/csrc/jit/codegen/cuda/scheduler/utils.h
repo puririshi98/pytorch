@@ -16,13 +16,17 @@ constexpr int64_t registerFileSize() {
   return 256 * 1024;
 }
 
-// Merge all reduction to the right side and returns total number of***
-// reduction axes
-size_t mergeReduction(TensorView* tv);
+// Merge all reduction to the right side and returns total number of
+// reduction axes. Don't merge is typically used for trivial reductions.
+size_t mergeReduction(
+    TensorView* tv,
+    const std::unordered_set<IterDomain*>& dont_merge = {});
 
 // merge all non-reduction axes to the left side and returns total number of
-// iteration axes
-size_t mergeNonReduction(TensorView* tv);
+// iteration axes. Don't merge is typically used for trivial reductions.
+size_t mergeNonReduction(
+    TensorView* tv,
+    const std::unordered_set<IterDomain*>& dont_merge = {});
 
 // Makes rfactor generic with reduction ops and Welford
 TensorView* rfactorHelper(TensorView* red_tv, const std::vector<int>& axes);
@@ -124,7 +128,8 @@ void computeAtBetween(
     const std::vector<TensorView*>& producers,
     const std::vector<TensorView*>& consumers,
     int pos,
-    ComputeAtMode mode);
+    ComputeAtMode mode,
+    std::unordered_set<IterDomain*> mapped_to_trivial_reduction = {});
 
 // Will call computeAt once on each producer, with the first consumer found that
 // is a consumer of the individual producer
@@ -133,7 +138,8 @@ void computeAtBetween(
     const std::vector<TensorView*>& consumers,
     int pos,
     ComputeAtMode mode,
-    std::unordered_set<TensorView*> tv_filter);
+    std::unordered_set<TensorView*> tv_filter,
+    std::unordered_set<IterDomain*> mapped_to_trivial_reduction = {});
 
 // Compute the amount of register space would be needed to perform this kernel
 // persistently, only based on buffers that must be persistent, and based on the

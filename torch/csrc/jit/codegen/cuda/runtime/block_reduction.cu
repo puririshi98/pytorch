@@ -32,7 +32,10 @@ __device__ void blockReduce(
     T init_val) {
   unsigned int reduction_size = (X_REDUCE ? block_dim.x : 1) *
       (Y_REDUCE ? block_dim.y : 1) * (Z_REDUCE ? block_dim.z : 1);
-
+  if (reduction_size == 1) {
+    out = inp_val;
+    return;
+  }
   // If this thread will output a final result
   bool should_write = true;
 

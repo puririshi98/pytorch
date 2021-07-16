@@ -16,11 +16,13 @@ namespace cuda {
 namespace scheduler_utils {
 // Merge all reduction to the right side and returns total number of
 // reduction axes
-size_t mergeReduction(TensorView* tv) {
+size_t mergeReduction(
+    TensorView* tv,
+    const std::unordered_set<IterDomain*>& dont_merge) {
   int prev_i = -1;
   size_t num_merged = 0;
   for (int i = static_cast<int>(tv->nDims()) - 1; i >= 0; i--) {
-    if (!tv->axis(i)->isReduction()) {
+    if (!tv->axis(i)->isReduction() || dont_merge.count(tv->axis(i))) {
       continue;
     }
     if (prev_i == -1) {
@@ -31,8 +33,8 @@ size_t mergeReduction(TensorView* tv) {
       num_merged++;
     }
   }
-  if (prev_i == 0) {
-    tv->reorder({{prev_i, -1}});
+  if (prev_i != 0) {
+    tv->reorder({{prev_i, 0}});
   }
 
   return prev_i == -1 ? 0 : num_merged + 1;
@@ -40,14 +42,16 @@ size_t mergeReduction(TensorView* tv) {
 
 // merge all non-reduction axes to the left side and returns total number of
 // iteration axes
-size_t mergeNonReduction(TensorView* tv) {
+size_t mergeNonReduction(
+    TensorView* tv,
+    const std::unordered_set<IterDomain*>& dont_merge) {
   int prev_i = -1;
   size_t num_merged = 0;
   if (tv->nDims() == 0) {
     return 0;
   }
   for (int i = static_cast<int>(tv->nDims()) - 1; i >= 0; i--) {
-    if (tv->axis(i)->isReduction()) {
+    if (tv->axis(i)->isReduction() || dont_merge.count(tv->axis(i))) {
       continue;
     }
     if (prev_i == -1) {
@@ -320,7 +324,8 @@ void computeAtBetween(
     const std::vector<TensorView*>& overall_consumers,
     int pos,
     ComputeAtMode mode,
-    std::unordered_set<TensorView*> tv_filter) {
+    std::unordered_set<TensorView*> tv_filter,
+    std::unordered_set<IterDomain*> mapped_to_trivial_reduction) {
   for (auto producer : producers) {
     // Figure out what's between producer and overall_consumers, will not give
     // back any consumers that are not downstream from producer
@@ -337,6 +342,22 @@ void computeAtBetween(
         if (producer == consumer) {
           continue;
         }
+
+        auto pos_it = std::find_if(
+            consumer->domain()->domain().begin(),
+            consumer->domain()->domain().end(),
+            [&mapped_to_trivial_reduction](IterDomain* id) {
+              return mapped_to_trivial_reduction.count(id);
+            });
+
+        pos = pos_it == consumer->domain()->domain().end()
+            ? pos
+            : std::min(
+                  (int)std::distance(
+                      consumer->domain()->domain().begin(), pos_it) +
+                      1,
+                  (pos < 0 ? pos + (int)consumer->nDims() : pos));
+
         // Assume we don't want to reset computeAt on tensors that have already
         // performed it.
         producer->computeAt(consumer, pos, mode);
@@ -349,7 +370,8 @@ void computeAtBetween(
     const std::vector<TensorView*>& producers,
     const std::vector<TensorView*>& overall_consumers,
     int pos,
-    ComputeAtMode mode) {
+    ComputeAtMode mode,
+    std::unordered_set<IterDomain*> mapped_to_trivial_reduction) {
   for (auto producer : producers) {
     // Figure out what's between producer and overall_consumers, will not give
     // back any consumers that are not downstream from producer
@@ -367,6 +389,20 @@ void computeAtBetween(
           continue;
         }
 
+        auto pos_it = std::find_if(
+            consumer->domain()->domain().begin(),
+            consumer->domain()->domain().end(),
+            [&mapped_to_trivial_reduction](IterDomain* id) {
+              return mapped_to_trivial_reduction.count(id);
+            });
+
+        pos = pos_it == consumer->domain()->domain().end()
+            ? pos
+            : std::min(
+                  (int)std::distance(
+                      consumer->domain()->domain().begin(), pos_it) +
+                      1,
+                  (pos < 0 ? pos + (int)consumer->nDims() : pos));
         // Assume we don't want to reset computeAt on tensors that have already
         // performed it.
         producer->computeAt(consumer, pos, mode);
