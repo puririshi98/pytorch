@@ -734,9 +734,7 @@ TensorView* scheduleReductionTV(
         //  r-TIDx, rF-Leftover, rf-Unswitch, rf-Unroll]
         //  1(r)       2(r+1)      3(r+2)       4(r+3)
 
-        std::cout << "HERE!" << std::endl;
         if (!rparams.persistent_kernel) {
-          std::cout << "NOT PERSISTENT" << std::endl;
           reduction_tv->split(
               reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
           reduction_tv->split(reduce_axis, rparams.loop_unroll);
@@ -744,7 +742,6 @@ TensorView* scheduleReductionTV(
           // unrolling
           reduction_tv->split(reduce_axis, 1);
         } else {
-          std::cout << "PERSISTENT" << std::endl;
           reduction_tv->split(
               reduce_axis,
               rparams.batches_per_block * rparams.loop_unroll,
@@ -1094,6 +1091,8 @@ void multiReductionInliner(
             [&mapped_to_trivial_reduction](IterDomain* id) {
               return id->getParallelType() == ParallelType::Unswitch ||
                   id->getParallelType() == ParallelType::Unroll ||
+                  id->getParallelType() == ParallelType::Vectorize ||
+                  id->getParallelType() == ParallelType::MisalignedVectorize ||
                   mapped_to_trivial_reduction.count(id);
             });
         auto unswitch_pos = unswitch_it == consumer->domain()->domain().end()
@@ -1122,7 +1121,7 @@ void multiReductionInliner(
 
     // Compute at inputs to rfactor dimensions
     scheduler_utils::computeAtBetween(
-        compute_from, {reference_tv}, pos, ComputeAtMode::MostInlined);
+        compute_from, rfactor_tvs, pos, ComputeAtMode::MostInlined);
 
     // Inline rfactor into reduction
     if (reference_tv != reduction_tv) {
@@ -1191,7 +1190,9 @@ void multiReductionInliner(
           output->domain()->domain().end(),
           [&mapped_to_trivial_reduction](IterDomain* id) {
             return id->getParallelType() == ParallelType::Unswitch ||
-                id->getParallelType() == ParallelType::Unswitch ||
+                id->getParallelType() == ParallelType::Unroll ||
+                id->getParallelType() == ParallelType::Vectorize ||
+                id->getParallelType() == ParallelType::MisalignedVectorize ||
                 mapped_to_trivial_reduction.count(id);
           });
       pos = pos_it == output->domain()->domain().end()
@@ -1221,7 +1222,9 @@ void multiReductionInliner(
           red_tv->domain()->domain().end(),
           [&mapped_to_trivial_reduction](IterDomain* id) {
             return id->getParallelType() == ParallelType::Unswitch ||
-                id->getParallelType() == ParallelType::Unswitch ||
+                id->getParallelType() == ParallelType::Unroll ||
+                id->getParallelType() == ParallelType::Vectorize ||
+                id->getParallelType() == ParallelType::MisalignedVectorize ||
                 mapped_to_trivial_reduction.count(id);
           });
       auto pos = pos_it == red_tv->domain()->domain().end()

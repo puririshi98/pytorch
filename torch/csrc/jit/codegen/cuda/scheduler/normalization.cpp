@@ -1097,7 +1097,6 @@ void schedulePersistentNormalization(
 void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   FUSER_PERF_SCOPE("scheduleMultiReduction");
   FusionGuard fg(fusion);
-
   // Cache tensors before grabbing any references to reductions as cache_before
   // can invalidate the references since when applied to a reduction tensor view
   // the new tensor view contains the reduction and original doesn't.
@@ -1119,9 +1118,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   std::vector<TensorView*> reduction_tvs;
   for (auto tv : all_tvs) {
     if (tv->hasReduction() && !tv->isFusionInput()) {
-      if (reduction_tvs.empty()) {
-        reduction_tvs.emplace_back(tv);
-      }
+      reduction_tvs.emplace_back(tv);
     }
   }
 
@@ -1145,7 +1142,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
 
   TensorView* reference_tv = scheduler_utils::scheduleReductionTV(
       rparams, reduction_tv, has_iter_axis);
-  std::cout << reference_tv << std::endl;
+
   // Reduction tensor views and rfactor tensor views are setup. Let's finish off
   // the scheduling, particularly inlining and unrolling.
   TORCH_INTERNAL_ASSERT(
