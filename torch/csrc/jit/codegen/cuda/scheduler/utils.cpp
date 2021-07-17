@@ -1212,6 +1212,21 @@ void multiReductionInliner(
         ComputeAtMode::MostInlined,
         mapped_to_trivial_reduction);
 
+    // Clear explicit unroll or vectorization when not for input or output GMEM
+    // transfers.
+    for (auto tv : scheduler_utils::allTvs(fusion)) {
+      if (!keep_unrolled.count(tv)) {
+        for (size_t i = 0; i < tv->nDims(); i++) {
+          auto id = tv->axis((int)i);
+          if (id->getParallelType() == ParallelType::Unroll ||
+              id->getParallelType() == ParallelType::Vectorize ||
+              id->getParallelType() == ParallelType::MisalignedVectorize) {
+            tv->axis((int)i)->parallelize(ParallelType::Serial);
+          }
+        }
+      }
+    }
+
   } else {
     // Want to inline, especially backwards based on reduction_tv, otherwise
     // rfactor tv may not be inlined correctly

@@ -110,7 +110,10 @@ struct PersistentBufferInfo {
 
 // Buffers whos roots can't map to all producer roots based on compute at. These
 // are the buffers we would make persistent in a persistent kerenl or would have
-// to recompute if we can't make a persistent kernel.
+// to recompute if we can't make a persistent kernel. This function will also
+// return inputs as being marked persistent if they follow this pattern. It is
+// important to note however inputs don't strictly have to be persistent as they
+// can simply be read multiple times from GMEM in the same kernel.
 PersistentBufferInfo persistentBuffers(Fusion* fusion);
 
 struct TvProperties {

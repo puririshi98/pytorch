@@ -15,8 +15,6 @@ namespace jit {
 namespace fuser {
 namespace cuda {
 
-// TODO: Fork outputs
-
 namespace {
 constexpr int64_t x_grid_limit = ((int64_t)1 << (int64_t)31) - (int64_t)1;
 // constexpr int64_t y_grid_limit = 65535; // unused at this time
@@ -618,482 +616,66 @@ void schedulePersistentNormalization(
     const ReductionParams& rparams) {
   FUSER_PERF_SCOPE("schedulePersistentNormalization");
   FusionGuard fg(fusion);
+  // Cache tensors before grabbing any references to reductions as cache_before
+  // can invalidate the references since when applied to a reduction tensor view
+  // the new tensor view contains the reduction and original doesn't.
+
+  // Cache inputs if unrolled
+  auto cached_inputs =
+      scheduler_utils::cacheInputs(fusion, rparams.loop_unroll > 1);
+
+  // Cache and fork  outputs
+  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs =
+      scheduler_utils::cacheAndForkOutputs(fusion, rparams.loop_unroll > 1);
 
   // Make sure we don't have global memory set on intermediate tensors from
   // fusion segmentation
   scheduler_utils::clearMemorySpace(fusion);
 
-  // Cache tensors before grabbing any references to reductions as cache_before
-  // can invalidate the references since when applied to a reduction tensor view
-  // the new tensor view contains the reduction and original doesn't.
-
-  // Make sure we don't make a cache of an input that would turn it into a
-  // persistent buffer. This gave invalid code.
-  std::vector<TensorView*> cached_inputs;
-  // If we're going to unroll, make a cache of the inputs
-  if (rparams.loop_unroll > 1) {
-    auto persistent_buffers =
-        scheduler_utils::persistentBuffers(fusion).buffers;
-    auto producers_for_persistence =
-        scheduler_utils::producerTvsOf(persistent_buffers);
-
-    auto in_tvs = ir_utils::filterByType<TensorView>(fusion->inputs());
-    for (auto tv : in_tvs) {
-      if (tv->uses().empty()) {
-        continue;
-      }
-      auto cached_tv = tv->cache_after();
-      cached_inputs.emplace_back(cached_tv);
-    }
-  }
-
-  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
-  // For intermediate outputs, apply cache_fork
-  for (const auto output :
-       ir_utils::filterByType<TensorView>(fusion->outputs())) {
-    if (output->definition() == nullptr) {
-      continue;
-    }
-    if (!output->uses().empty()) {
-      if (output->getValType().value() == ValType::TensorView) {
-        auto cached_output = output->as<TensorView>()->cache_fork();
-        cached_outputs.push_back(std::make_pair(output, cached_output));
-      }
-    } else if (rparams.loop_unroll > 1) {
-      auto cached_output = output->as<TensorView>()->cache_before();
-      cached_outputs.push_back(std::make_pair(cached_output, output));
-    }
-  }
-
+  auto all_tvs = scheduler_utils::allTvs(fusion);
   std::vector<TensorView*> reduction_tvs;
-  for (auto tv : scheduler_utils::allTvs(fusion)) {
-    if (tv->hasReduction() && !fusion->hasInput(tv)) {
-      if (auto welford_op = dynamic_cast<WelfordOp*>(tv->definition())) {
-        if (tv == welford_op->out()) {
-          reduction_tvs.push_back(tv);
-        }
-      } else {
-        reduction_tvs.push_back(tv);
-      }
+  for (auto tv : all_tvs) {
+    if (tv->hasReduction() && !tv->isFusionInput()) {
+      reduction_tvs.emplace_back(tv);
     }
   }
 
-  TORCH_INTERNAL_ASSERT(
-      !reduction_tvs.empty(), "Need reduction tensor views to schedule.");
-
+  TORCH_INTERNAL_ASSERT(reduction_tvs.size());
   auto reduction_tv = reduction_tvs[0];
-  TensorView* rfactor_tv = nullptr;
 
-  scheduler_utils::mergeReduction(reduction_tv);
+  auto dim_analysis =
+      scheduler_utils::canonicalDimReduction(fusion, reduction_tv);
+  bool has_iter_axis = dim_analysis.first;
+  bool has_red_axis = dim_analysis.second;
 
-  // Merge all iteration dimensions
-  if (reduction_tv->nDims() > 1) {
-    scheduler_utils::mergeNonReduction(reduction_tv);
-  }
-
-  // Evaluate Dimensions of Reduction TensorView
   TORCH_INTERNAL_ASSERT(
-      reduction_tv->nDims() == 1 || reduction_tv->nDims() == 2,
-      "Error coalesing dimensions.");
+      has_red_axis,
+      "Could not find reduction axis in tensor used for reduction scheduler.");
 
-  if (reduction_tv->domain()->domain().size() == 1) {
+  if (!has_iter_axis) {
     TORCH_INTERNAL_ASSERT(
         rparams.fastest_dim,
         "If all dims are reduction, should be sending it to fastest dim scheduler.");
   }
+  TensorView* reference_tv = scheduler_utils::scheduleReductionTV(
+      rparams, reduction_tv, has_iter_axis);
 
-  std::vector<int> rfactor_axes;
+  // Reduction tensor views and rfactor tensor views are setup. Let's finish off
+  // the scheduling, particularly inlining and unrolling.
+  TORCH_INTERNAL_ASSERT(
+      reference_tv != nullptr && reduction_tv != nullptr,
+      "Need these two tensor views to finish the scheduling.");
 
-  // Scheduling the Reduction
-  if (rparams.fastest_dim) {
-    const bool has_iter_axis = reduction_tv->nDims() == 2;
-    const int iter_axis = 0;
-    const int reduce_axis = reduction_tv->nDims() == 2 ? 1 : 0;
-
-    // Do multiple reductions per block
-    if (rparams.multiple_reds_per_blk) {
-      if (rparams.reduction_unroll) {
-        // Fastest dim, multiple reductions per block
-        // Output Dimensions
-        // [x-BIDx, x-TIDy
-        //  0       1
-        //
-        //  Reduction Dimensions
-        //  rF-persistent, rf-Unswitch, rf-Unroll, X-TIDx]
-        //  2 (-4)     3 (-3)       4 (-2)     5 (-1)
-
-        //  X-TIDx, rF-persistent, rf-Unswitch, rf-Unroll]
-        //  2 (-4)  3 (-3)         4 (-2)       5 (-1)
-        reduction_tv->split(
-            reduce_axis,
-            rparams.batches_per_block * rparams.loop_unroll,
-            false);
-        reduction_tv->split(reduce_axis, rparams.loop_unroll);
-        // Unswitch axis which gives us finer control on allocations with
-        // unrolling
-        reduction_tv->split(reduce_axis, 1);
-        reduction_tv->reorder({{-1, -4}, {-4, -3}, {-3, -2}, {-2, -1}});
-        rfactor_axes = {-3, -2, -1};
-        rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
-
-        rfactor_tv->axis(-4)->parallelize(ParallelType::TIDx);
-        // rfactor_tv->axis(-3)->parallelize(ParallelType::Unswitch);
-        rfactor_tv->axis(-1)->parallelize(ParallelType::Unroll);
-
-        if (has_iter_axis) {
-          rfactor_tv->split(
-              iter_axis, NamedScalar::getParallelDim(ParallelType::TIDy));
-          rfactor_tv->axis(iter_axis + 1)->parallelize(ParallelType::TIDy);
-          if (rparams.split_grid_dim) {
-            rfactor_tv->split(iter_axis, x_grid_limit);
-            rfactor_tv->axis(iter_axis + 1)->parallelize(ParallelType::BIDx);
-          } else {
-            rfactor_tv->axis(iter_axis)->parallelize(ParallelType::BIDx);
-          }
-        }
-      } else {
-        TORCH_INTERNAL_ASSERT(false, "Heuristic pattern disabled.");
-        TORCH_INTERNAL_ASSERT(
-            has_iter_axis,
-            "This scheduler requires an outer dim to the reduction.");
-        // Fastest dim, Multiple reductions per block iter unroll
-        // Output Dimensions
-        // [x-BIDx, x-Unswitch, x-Unroll, x-TIDy
-        //  0       1           2         3
-        //
-        //  Reduction Dimensions
-        //  rF-persistent, r-TIDx]
-        //  4 (-2)     5 (-1)
-
-        reduction_tv->split(reduce_axis, rparams.batches_per_block, false);
-
-        rfactor_axes = {-2};
-        rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
-
-        rfactor_tv->axis(-1)->parallelize(ParallelType::TIDx);
-
-        if (has_iter_axis) {
-          rfactor_tv->split(
-              iter_axis, NamedScalar::getParallelDim(ParallelType::TIDy));
-          rfactor_tv->split(iter_axis, rparams.loop_unroll);
-          // Unswitch axis which gives us finer control on allocations with
-          // unrolling
-          rfactor_tv->split(iter_axis, 1);
-
-          rfactor_tv->axis(3)->parallelize(ParallelType::TIDy);
-          // TODO: Re-enable unswitch in this case:
-          // https://github.com/csarofeen/pytorch/issues/748
-          // rfactor_tv->axis(1)->parallelize(ParallelType::Unswitch);
-
-          // [BIDx, 1, 8, TIDy, rf-outer, r-TIDx]
-
-          if (rparams.split_grid_dim) {
-            rfactor_tv->split(iter_axis, x_grid_limit);
-            rfactor_tv->axis(iter_axis + 1)->parallelize(ParallelType::BIDx);
-          } else {
-            rfactor_tv->axis(iter_axis)->parallelize(ParallelType::BIDx);
-          }
-        }
-      }
-    } else {
-      // PLAYING WITH BATCH NORM:
-      // reduction_tv->merge(2, 3);
-      // // Fastest dim, Reduction Splits
-      // // Outer reduction Dimension
-      // // [ TIDz, 2
-      // //   0     1
-      // //   BIDx
-      // //   2
-      // //
-      // //  Inner Reduction Dimensions
-      // //  rf-Persistent/2, rf-Unroll, r-TIDx]
-      // //      3               4         5
-      // //
-      // //  rf-Persistent/2, rf-Unroll, r-TIDx]
-      // //      3               4         5
-
-      // // [r0, i1, r2*r3]
-      // reduction_tv->reorder({{0, 1}, {1, 0}});
-      // // [i1, r0, r2*r3]
-      // // [BIDx, r0, r2*r3]
-      // reduction_tv->split(1, 2);
-      // // [BIDx, r0o, r0i{2}, r2*r3]
-      // // [BIDx, TIDz, r0i{2}, r2*r3]
-      // reduction_tv->split(-1, ceilDiv(rparams.batches_per_block, 2) *
-      // rparams.loop_unroll, false);
-      // // [BIDx, TIDz, r0i{2}, (r2*r3)o{rf*un}, (r2*r3)i]
-      // reduction_tv->split(-2, rparams.loop_unroll);
-      // // [BIDx, TIDz, r0i{2}, rF, unroll, (r2*r3)i]
-      // reduction_tv->reorder({{-1, -2}, {-2, -1}});
-      // // [BIDx, TIDz, r0i{2}, rF, TIDx, unroll]
-      // rfactor_axes = {-4, -3, -1};
-      // rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv,
-      // rfactor_axes);
-
-      // rfactor_tv->axis(0)->parallelize(ParallelType::BIDx);
-      // rfactor_tv->axis(-5)->parallelize(ParallelType::TIDy);
-      // rfactor_tv->axis(-2)->parallelize(ParallelType::TIDx);
-      // rfactor_tv->axis(-1)->parallelize(ParallelType::Unroll);
-      // std::cout<<rfactor_tv<<std::endl;
-      // std::cout<<reduction_tv<<std::endl;
-
-      // Fastest dim, Reduction Splits
-      // Output Dimensions
-      // [BIDx
-      //  0
-      //
-      //  Reduction Dimensions
-      //  rF-persistent, rf-Unswitch, rf-Unroll, X-TIDx]
-      //  1 (-4)         2 (-3)       3 (-2)     4 (-1)
-
-      //  X-TIDx, rF-persistent, rf-Unswitch, rf-Unroll]
-      //  1 (-4)  2 (-3)         3 (-2)       4 (-1)
-
-      reduction_tv->split(
-          reduce_axis, rparams.batches_per_block * rparams.loop_unroll, false);
-      reduction_tv->split(reduce_axis, rparams.loop_unroll);
-      // Unswitch axis which gives us finer control on allocations with
-      // unrolling
-      reduction_tv->split(reduce_axis, 1);
-
-      reduction_tv->reorder({{-1, -4}, {-4, -3}, {-3, -2}, {-2, -1}});
-
-      rfactor_axes = {-3, -2, -1};
-      rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
-
-      rfactor_tv->axis(-4)->parallelize(ParallelType::TIDx);
-      // rfactor_tv->axis(-2)->parallelize(ParallelType::Unswitch);
-      rfactor_tv->axis(-1)->parallelize(ParallelType::Unroll);
-
-      if (has_iter_axis) {
-        if (rparams.split_grid_dim) {
-          rfactor_tv->split(iter_axis, x_grid_limit);
-          rfactor_tv->axis(iter_axis + 1)->parallelize(ParallelType::BIDx);
-        } else {
-          rfactor_tv->axis(iter_axis)->parallelize(ParallelType::BIDx);
-        }
-      }
-    }
-  } else {
-    if (rparams.cross_block) {
-      if (rparams.reduction_unroll || rparams.loop_unroll == 1) {
-        // Outer Dim, cross block, unroll reduction dimension
-
-        // Reduction Splits
-        // Output Dimensions
-        // [x-BIDx, x-TIDx
-        //  0       1
-        //
-        // Reduction Dimensions
-        // rF-Persistent, r-TIDy, rf-Unswitch, rf-Unroll]
-        // 2(-4)        3(-3)   4(-2)       5(-1)
-        reduction_tv->split(-1, rparams.batches_per_block, false);
-        reduction_tv->split(-1, rparams.loop_unroll);
-        reduction_tv->split(-2, 1);
-        // Unswitch axis which gives us finer control on allocations with
-        // unrolling
-        reduction_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
-        rfactor_axes = {-4, -2, -1};
-        rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
-
-        // rfactor_tv->axis(-2)->parallelize(ParallelType::Unswitch);
-        rfactor_tv->axis(-1)->parallelize(ParallelType::Unroll);
-        rfactor_tv->axis(-3)->parallelize(ParallelType::TIDy);
-        rfactor_tv->axis(1)->parallelize(ParallelType::TIDx);
-        rfactor_tv->axis(0)->parallelize(ParallelType::BIDx);
-      } else {
-        TORCH_INTERNAL_ASSERT(false, "Heuristic pattern disabled.");
-        // Outer Dim, cross block, unroll iter dimension
-
-        // Output Dimensions
-        // [x-BIDx, x-Unswitch, x-Unroll, x-TIDx
-        //  0       1           2         3
-        //
-        // Reduction Dimensions
-        // rF-Leftover, r-TIDy]
-        // 4(-2)        5(-1)
-
-        reduction_tv->split(-1, rparams.batches_per_block, false);
-        reduction_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
-        reduction_tv->split(0, rparams.loop_unroll);
-        // Unswitch axis which gives us finer control on allocations with
-        // unrolling
-        reduction_tv->split(0, 1);
-        // [x-BIDx, x-Unswitch, x-Unroll, x-TIDx, rF-Leftover, r-TIDy]
-        rfactor_axes = {-2};
-        rfactor_tv = scheduler_utils::rfactorHelper(reduction_tv, rfactor_axes);
-
-        rfactor_tv->axis(-1)->parallelize(ParallelType::TIDy);
-        rfactor_tv->axis(3)->parallelize(ParallelType::TIDx);
-        rfactor_tv->axis(1)->parallelize(ParallelType::Unswitch);
-        rfactor_tv->axis(0)->parallelize(ParallelType::BIDx);
-      }
-    } else {
-      TORCH_INTERNAL_ASSERT(
-          false, "Need to bind thread dimension for persistent kernels.");
-    }
-  }
-
-  bool rfactor = rfactor_tv != nullptr;
-  auto reference_tv = rfactor ? rfactor_tv : reduction_tv;
-  std::vector<TensorView*> rfactor_tvs;
-
-  // Make everything look like reference tv
-  TransformPropagator::from(reference_tv);
-
-  for (auto reduction_tv_ : reduction_tvs) {
-    if (reduction_tv_ == reduction_tv) {
-      // The reduction tv
-      rfactor_tvs.push_back(rfactor_tv);
-      continue;
-    } else {
-      // other reduction tvs
-      rfactor_tvs.push_back(
-          scheduler_utils::rfactorHelper(reduction_tv_, rfactor_axes));
-    }
-  }
-
-  scheduler_utils::parallelizeAllLike(
-      reference_tv, scheduler_utils::allTvs(fusion));
-
-  // Tensors that are consumers of the reduction operations. These are safe to
-  // computeAt with.
-
-  std::unordered_set<TensorView*> reduction_consumers;
-  {
-    auto reduction_consumer_vals = DependencyCheck::getAllDependentVals(
-        {reduction_tvs.begin(), reduction_tvs.end()});
-    auto reduction_consumer_tvs =
-        ir_utils::filterByType<TensorView>(reduction_consumer_vals);
-    reduction_consumers = std::unordered_set<TensorView*>(
-        reduction_consumer_tvs.begin(), reduction_consumer_tvs.end());
-  }
-
-  if (rparams.loop_unroll > 1) {
-    // Schedule unrolling on inputs
-
-    // Input to cached we want outside unswitched position
-    // Cached input to rfactor we want inlined
-    std::unordered_set<TensorView*> reference_tvs;
-    {
-      auto ref_tvs = rfactor ? rfactor_tvs : reduction_tvs;
-      std::transform(
-          ref_tvs.begin(),
-          ref_tvs.end(),
-          std::inserter(reference_tvs, reference_tvs.end()),
-          [](TensorView* tv) { return tv; });
-    }
-
-    std::unordered_set<TensorView*> keep_unrolled;
-
-    std::vector<TensorView*> compute_from;
-
-    for (auto cached_input : cached_inputs) {
-      auto consumers_of_input_cache =
-          scheduler_utils::consumerTvsOf(cached_input);
-      for (auto consumer : consumers_of_input_cache) {
-        // scheduler_utils::computeAtOutputs(
-        //     consumer, -1, reduction_consumers, ComputeAtMode::MostInlined);
-        auto unroll_it = std::find_if(
-            consumer->domain()->domain().begin(),
-            consumer->domain()->domain().end(),
-            [](IterDomain* id) {
-              return id->getParallelType() == ParallelType::Unroll;
-            });
-        auto unroll_pos = unroll_it == consumer->domain()->domain().end()
-            ? -1
-            : std::distance(consumer->domain()->domain().begin(), unroll_it);
-
-        cached_input->computeAt(
-            consumer, unroll_pos - 1, ComputeAtMode::BestEffort);
-        compute_from.push_back(consumer);
-        keep_unrolled.emplace(cached_input);
-      }
-    }
-
-    std::vector<TensorView*> compute_to;
-    for (auto cached_output_pair : cached_outputs) {
-      auto cached_output = cached_output_pair.first;
-      auto output = cached_output_pair.second;
-
-      auto unroll_it = std::find_if(
-          output->domain()->domain().begin(),
-          output->domain()->domain().end(),
-          [](IterDomain* id) {
-            return id->getParallelType() == ParallelType::Unroll;
-          });
-      auto unroll_pos = unroll_it == output->domain()->domain().end()
-          ? -1
-          : std::distance(output->domain()->domain().begin(), unroll_it);
-
-      cached_output->computeAt(output, unroll_pos, ComputeAtMode::BestEffort);
-      compute_to.push_back(cached_output);
-      keep_unrolled.emplace(output);
-    }
-
-    scheduler_utils::computeAtBetween(
-        compute_from,
-        compute_to,
-        -1,
-        ComputeAtMode::MostInlined,
-        reduction_consumers);
-
-    // These are lined up, inline rfactor tv's into reduction tvs.
-    for (size_t red_i = 0;
-         red_i < reduction_tvs.size() && red_i < rfactor_tvs.size();
-         red_i++) {
-      rfactor_tvs[red_i]->computeWith(
-          reduction_tvs[red_i], -1, ComputeAtMode::BestEffort);
-    }
-
-    // Compute at should not remove parallelization scheme, but let's just make
-    // sure everything is set properly
-    scheduler_utils::parallelizeAllLike(
-        reference_tv, scheduler_utils::allTvs(fusion));
-
-    // Clear explicit unroll's when not for input or output GMEM transfers.
-    for (auto tv : scheduler_utils::allTvs(fusion)) {
-      if (!keep_unrolled.count(tv)) {
-        for (size_t i = 0; i < tv->nDims(); i++) {
-          if (tv->axis((int)i)->getParallelType() == ParallelType::Unroll) {
-            tv->axis((int)i)->parallelize(ParallelType::Serial);
-          }
-        }
-      }
-    }
-  } else {
-    // Want to inline, especially backwards based on reduction_tv, otherwise
-    // rfactor tv may not be inlined correctly
-    for (auto cur_red_it = reduction_tvs.begin();
-         cur_red_it != reduction_tvs.end();
-         cur_red_it++) {
-      if (std::any_of(
-              cur_red_it + 1,
-              reduction_tvs.end(),
-              [&cur_red_it](TensorView* following_red_it) {
-                return DependencyCheck::isDependencyOf(
-                    *cur_red_it, following_red_it);
-              })) {
-        // if this reduction is a producer of another, don't compute at from it,
-        // as the consumer reduction will cover all tensors that this one would
-        // have
-        continue;
-      }
-
-      scheduler_utils::computeAtInputs(
-          *cur_red_it, -1, ComputeAtMode::MostInlined);
-      scheduler_utils::computeWithOutputs(
-          *cur_red_it, -1, ComputeAtMode::MostInlined);
-    }
-
-    scheduler_utils::parallelizeAllLike(
-        reference_tv, scheduler_utils::allTvs(fusion));
-  }
+  scheduler_utils::multiReductionInliner(
+      fusion,
+      rparams,
+      reduction_tv,
+      reference_tv,
+      reduction_tvs,
+      cached_inputs,
+      cached_outputs);
 }
 
-// TODO: This is really similar to persistent normalization except splits that
-// are not on inner most dimension. We should probably unify the
-// implementations.
 void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   FUSER_PERF_SCOPE("scheduleMultiReduction");
   FusionGuard fg(fusion);
@@ -1102,7 +684,6 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   // the new tensor view contains the reduction and original doesn't.
 
   // Cache inputs if unrolled
-  // TODO: Make sure if we cache an input the kernel doesn't turn persistent
   auto cached_inputs =
       scheduler_utils::cacheInputs(fusion, rparams.loop_unroll > 1);
 
