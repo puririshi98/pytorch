@@ -224,13 +224,7 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   // Make sure we don't have global memory set on intermediate tensors from
   // fusion segmentation
-  for (auto tv : scheduler_utils::allTvs(fusion)) {
-    if (tv->isFusionInput() || tv->isFusionOutput()) {
-      tv->setMemoryType(MemoryType::Global);
-    } else {
-      tv->setMemoryType(MemoryType::Local);
-    }
-  }
+  scheduler_utils::clearMemorySpace(fusion);
 
   // maybe has_reduction for scheduling should be done on a per output tensor
   // basis.

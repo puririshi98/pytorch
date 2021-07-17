@@ -12,8 +12,20 @@ class SchedulerRuntimeInfo;
 
 namespace scheduler_utils {
 
-constexpr int64_t registerFileSize() {
-  return 256 * 1024;
+constexpr int64_t register_file_size = 256 * 1024;
+constexpr int64_t x_grid_limit = ((int64_t)1 << (int64_t)31) - (int64_t)1;
+constexpr int64_t y_grid_limit = 65535;
+
+// Largest Power of 2 less-than n
+constexpr int64_t lastPow2(int64_t n) {
+  TORCH_INTERNAL_ASSERT(n >= 0);
+  n |= (n >> 1);
+  n |= (n >> 2);
+  n |= (n >> 4);
+  n |= (n >> 8); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+  n |= (n >> 16); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+  n |= (n >> 32); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+  return std::max((int64_t)1, n - (n >> 1));
 }
 
 // Merge all reduction to the right side and returns total number of
@@ -148,6 +160,49 @@ void computeAtBetween(
 int64_t persistentBufferSize(
     Fusion* fusion,
     torch::jit::fuser::cuda::ExpressionEvaluator& expr_eval);
+
+// Returns a set of all iteration domains (in roots of tensors) that map to a
+// trivial reduction
+std::unordered_set<IterDomain*> getTrivialReductionMap(Fusion* fusion);
+
+// Merges tensor view to the form:
+// [IterationDomain, ReductionDomain, TrivialReductionDim0,
+// TrivialReductionDim1, ...] Returns if <iteration dimensions, reduction
+// dimensions>
+std::pair<bool, bool> canonicalDimReduction(Fusion* fusion, TensorView* tv);
+
+// Consistent parallelization based on provided reduction parameters. Provided
+// tensor is expected to be reduced by canonicalDimReduction before sending
+// here. reduction_tv should be provided as the tensorview to reduce.
+// RFactor of reduction_tv will be returned if applicable otherwise reduction_tv
+// is returned
+TensorView* scheduleReductionTV(
+    const ReductionParams& rparams,
+    TensorView* reduction_tv,
+    bool has_iter_axis);
+
+// Reset inputs and outputs to global memory, everything else to local.
+void clearMemorySpace(Fusion* fusion);
+
+// Returns cached after tensors of the fusion inputs if unrolled. Otherwise
+// return empty vector.
+std::vector<TensorView*> cacheInputs(Fusion* fusion, bool unroll);
+
+// Returns the pairs of <cache of each fusion output, corresponding output> for
+// all outputs.
+std::vector<std::pair<TensorView*, TensorView*>> cacheAndForkOutputs(
+    Fusion* fusion,
+    bool unroll);
+
+// Inlining function intended for single or multi reduction fusions.
+void multiReductionInliner(
+    Fusion* fusion,
+    const ReductionParams& rparams,
+    TensorView* reduction_tv,
+    TensorView* reference_tv,
+    std::vector<TensorView*> reduction_tvs,
+    std::vector<TensorView*> cached_inputs,
+    std::vector<std::pair<TensorView*, TensorView*>> cached_outputs);
 
 } // namespace scheduler_utils
 } // namespace cuda
