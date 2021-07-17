@@ -144,12 +144,13 @@ ReductionParams innerReductionHeuristic(
 
   // Adjust blocking and setup unrolling
   if (remainder_in_reduction == 1) {
-    // Small number of reduction elements, don't try to unroll the reduction dim
-    unroll_reduction = false;
-    // Try unrolling output dimension
+    // Small number of reduction elements,try unrolling output dimension
     unroll_factor = std::min(target_unroll, remainder_in_output);
-    remainder_in_output =
-        ceilDiv(num_outputs_for_reduction, unroll_factor * bdimy);
+    if (unroll_factor > 1) {
+      unroll_reduction = false;
+      remainder_in_output =
+          ceilDiv(num_outputs_for_reduction, unroll_factor * bdimy);
+    }
   } else {
     // If we have reduction elements left, re-adjust the block dims
     bdimx = std::min(
@@ -164,8 +165,10 @@ ReductionParams innerReductionHeuristic(
     unroll_factor = std::min(remainder_in_reduction, target_unroll);
     if (unroll_factor == 1) {
       // If we can't unroll reduction dim, unroll output dim
-      unroll_reduction = false;
       unroll_factor = std::min(remainder_in_output, target_unroll);
+      if (unroll_factor > 1) {
+        unroll_reduction = false;
+      }
       remainder_in_output =
           ceilDiv(num_outputs_for_reduction, bdimy * unroll_factor);
       remainder_in_reduction =
@@ -185,9 +188,29 @@ ReductionParams innerReductionHeuristic(
 
   // Cross grid reduction if we haven't hit our target blocks, and we have many
   // reduction elements.
-  if (godim < target_blocks && remainder_in_reduction > kEight &&
-      remainder_in_reduction < kThirtyTwo) {
-    grdim = ceilDiv(remainder_in_reduction, (int64_t)4);
+  if ((godim < target_blocks && remainder_in_reduction > kEight &&
+       remainder_in_reduction < kThirtyTwo) ||
+      (remainder_in_reduction >= kThirtyTwo)) {
+    // Grid reductions do not support unrolling iteration dimension, revert if
+    // set.
+    if (!unroll_reduction) {
+      unroll_reduction = true;
+      unroll_factor = 1;
+      remainder_in_output = ceilDiv(num_outputs_for_reduction, bdimy);
+      remainder_in_reduction =
+          ceilDiv(num_elems_in_reduction, bdimx * min_red_elems_per_thread);
+    }
+    if (remainder_in_reduction >= kThirtyTwo) {
+      // Do at least 2 iterations of unrolling per thread before we go cross
+      // grid. Limit cross grid to a multiple of the block size so cleanup on
+      // the last block doesn't take too long.
+      grdim = std::min(
+          ceilDiv(remainder_in_reduction, (int64_t)2), bdimx * bdimy * kEight);
+      // Clang tidy
+      // remainder_in_reduction = ceilDiv(remainder_in_reduction, grdim);
+    } else {
+      grdim = ceilDiv(remainder_in_reduction, (int64_t)4);
+    }
     // Clang tidy
     //
     // remainder_in_reduction = ceilDiv(
@@ -197,14 +220,6 @@ ReductionParams innerReductionHeuristic(
     //             unroll_reduction ? unroll_factor : 1,
     //             min_red_elems_per_thread) *
     //         grdim);
-  } else if (remainder_in_reduction >= kThirtyTwo) {
-    // Do at least 2 iterations of unrolling per thread before we go cross grid.
-    // Limit cross grid to a multiple of the block size so cleanup on the last
-    // block doesn't take too long.
-    grdim = std::min(
-        ceilDiv(remainder_in_reduction, (int64_t)2), bdimx * bdimy * kEight);
-    // Clang tidy
-    // remainder_in_reduction = ceilDiv(remainder_in_reduction, grdim);
   }
 
   // Try to do some cleanup of ragged waves on device
@@ -636,22 +651,14 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
   // fusion segmentation
   scheduler_utils::clearMemorySpace(fusion);
 
-  auto all_tvs = scheduler_utils::allTvs(fusion);
-  std::vector<TensorView*> reduction_tvs;
-  for (auto tv : all_tvs) {
-    if (tv->hasReduction() && !tv->isFusionInput()) {
-      if (reduction_tvs.empty()) {
-        reduction_tvs.emplace_back(tv);
-      } else {
-        TORCH_INTERNAL_ASSERT(
-            reduction_tvs[0]->definition() == tv->definition(),
-            "Found multiple reductions sent to reduction heuristics",
-            " (and reductions are not from a multi-output expr).");
-      }
-    }
-  }
+  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
 
+  TORCH_INTERNAL_ASSERT(
+      reduction_tvs.size() <= 1,
+      "Found multiple reductions sent to reduction heuristics",
+      " (and reductions are not from a multi-output expr).");
   TORCH_INTERNAL_ASSERT(reduction_tvs.size());
+
   auto reduction_tv = reduction_tvs[0];
 
   auto dim_analysis =

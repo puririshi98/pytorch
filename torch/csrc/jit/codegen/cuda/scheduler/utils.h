@@ -174,6 +174,11 @@ std::unordered_set<IterDomain*> getTrivialReductionMap(Fusion* fusion);
 // dimensions>
 std::pair<bool, bool> canonicalDimReduction(Fusion* fusion, TensorView* tv);
 
+// Return a list of tensor views that are outputs of reduction operations. If
+// multiple outputs of an expression are found, only include one in the list
+// (WelfordOp)
+std::vector<TensorView*> getReductionTvs(Fusion* fusion);
+
 // Consistent parallelization based on provided reduction parameters. Provided
 // tensor is expected to be reduced by canonicalDimReduction before sending
 // here. reduction_tv should be provided as the tensorview to reduce.

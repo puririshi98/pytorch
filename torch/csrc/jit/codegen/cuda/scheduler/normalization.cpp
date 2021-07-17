@@ -632,13 +632,7 @@ void schedulePersistentNormalization(
   // fusion segmentation
   scheduler_utils::clearMemorySpace(fusion);
 
-  auto all_tvs = scheduler_utils::allTvs(fusion);
-  std::vector<TensorView*> reduction_tvs;
-  for (auto tv : all_tvs) {
-    if (tv->hasReduction() && !tv->isFusionInput()) {
-      reduction_tvs.emplace_back(tv);
-    }
-  }
+  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
 
   TORCH_INTERNAL_ASSERT(reduction_tvs.size());
   auto reduction_tv = reduction_tvs[0];
@@ -657,6 +651,7 @@ void schedulePersistentNormalization(
         rparams.fastest_dim,
         "If all dims are reduction, should be sending it to fastest dim scheduler.");
   }
+
   TensorView* reference_tv = scheduler_utils::scheduleReductionTV(
       rparams, reduction_tv, has_iter_axis);
 
@@ -695,13 +690,7 @@ void scheduleMultiReduction(Fusion* fusion, const ReductionParams& rparams) {
   // fusion segmentation
   scheduler_utils::clearMemorySpace(fusion);
 
-  auto all_tvs = scheduler_utils::allTvs(fusion);
-  std::vector<TensorView*> reduction_tvs;
-  for (auto tv : all_tvs) {
-    if (tv->hasReduction() && !tv->isFusionInput()) {
-      reduction_tvs.emplace_back(tv);
-    }
-  }
+  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
 
   TORCH_INTERNAL_ASSERT(reduction_tvs.size());
   auto reduction_tv = reduction_tvs[0];

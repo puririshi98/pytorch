@@ -547,6 +547,40 @@ std::pair<bool, bool> canonicalDimReduction(Fusion* fusion, TensorView* tv) {
   return {has_iter_axis, has_red_axis};
 }
 
+std::vector<TensorView*> getReductionTvs(Fusion* fusion) {
+  auto all_tvs = scheduler_utils::allTvs(fusion);
+  std::vector<TensorView*> reduction_tvs;
+  for (auto tv : all_tvs) {
+    if (!tv->isFusionInput() &&
+        std::any_of(
+            tv->domain()->domain().begin(),
+            tv->domain()->domain().end(),
+            [](IterDomain* id) {
+              return id->isReduction() && !id->isTrivialReduction();
+            })) {
+      reduction_tvs.emplace_back(tv);
+    }
+  }
+
+  // Remove multi outputs from reduction tensor views
+  std::unordered_set<Expr*> seen_reduction_exprs;
+  reduction_tvs.erase(
+      std::remove_if(
+          reduction_tvs.begin(),
+          reduction_tvs.end(),
+          [&seen_reduction_exprs](TensorView* tv) {
+            TORCH_INTERNAL_ASSERT(
+                tv->definition() != nullptr,
+                "Somehow a tensor view without a definition but a reduction snuck into the scheduler reduction list.");
+            if (!seen_reduction_exprs.emplace(tv->definition()).second) {
+              return true;
+            }
+            return false;
+          }),
+      reduction_tvs.end());
+  return reduction_tvs;
+}
+
 TensorView* scheduleReductionTV(
     const ReductionParams& rparams,
     TensorView* reduction_tv,
