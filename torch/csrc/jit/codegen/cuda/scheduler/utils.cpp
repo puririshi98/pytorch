@@ -1243,7 +1243,7 @@ void multiReductionInliner(
         compute_from,
         compute_to,
         -1,
-        ComputeAtMode::MostInlined,
+        ComputeAtMode::BestEffort,
         mapped_to_trivial_reduction);
 
     // Clear explicit unroll or vectorization when not for input or output GMEM
