@@ -420,7 +420,7 @@ int64_t persistentBufferSize(
   auto persistent_buffers = scheduler_utils::persistentBuffers(fusion);
 
   if (persistent_buffers.buffers.empty()) {
-    return true;
+    return 0;
   }
 
   int64_t persistent_buffer_size = 0;
@@ -431,7 +431,7 @@ int64_t persistentBufferSize(
   for (auto tv : persistent_buffers.buffers) {
     int64_t tv_persistent_numel = -1;
     for (auto id : tv->getMaybeRFactorDomain()) {
-      if (id->isReduction()) {
+      if (id->isReduction() || id->isBroadcast()) {
         continue;
       }
       // Unmappable dimensions are those that we cannot inline into other
