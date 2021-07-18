@@ -1292,7 +1292,7 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
   std::deque<TensorView*> to_visit{starting_tv};
   std::unordered_set<TensorView*> visited;
   mapped_ids.emplace(std::make_pair(starting_tv, starting_id));
-  starting_tv->fusion()->printMath();
+
   // Propagate mapping of id
   while (!to_visit.empty()) {
     auto tv = to_visit.front();
