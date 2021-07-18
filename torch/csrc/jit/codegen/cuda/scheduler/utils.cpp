@@ -1303,7 +1303,6 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
     }
 
     auto tv_id = mapped_ids.at(tv);
-    std::cout << "Prop: " << id << " from tv: " << tv << std::endl;
 
     for (auto consumer_tv : consumerTvsOf(tv)) {
       if (visited.find(consumer_tv) != visited.end()) {
@@ -1314,8 +1313,6 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
         continue;
       }
 
-      std::cout << "To consumer: " << consumer_tv << std::endl;
-
       PairwiseRootDomainMap root_map(tv, consumer_tv);
       auto p2c_map =
           root_map.mapProducerToConsumer(tv->domain(), consumer_tv->domain());
@@ -1324,9 +1321,6 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
       if (c_it != p2c_map.end()) {
         mapped_ids.emplace(std::make_pair(consumer_tv, c_it->second));
         to_visit.emplace_back(consumer_tv);
-        std::cout << "Found: " << c_it->second << std::endl;
-      } else {
-        std::cout << "Not found" << std::endl;
       }
     }
 
@@ -1339,7 +1333,6 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
         continue;
       }
 
-      std::cout << "To producer: " << producer_tv << std::endl;
       PairwiseRootDomainMap root_map(producer_tv, tv);
       auto c2p_map =
           root_map.mapConsumerToProducer(tv->domain(), producer_tv->domain());
@@ -1347,9 +1340,6 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
       if (p_it != c2p_map.end()) {
         mapped_ids.emplace(std::make_pair(producer_tv, p_it->second));
         to_visit.emplace_back(producer_tv);
-        std::cout << "Found: " << p_it->second << std::endl;
-      } else {
-        std::cout << "Not found" << std::endl;
       }
     }
   }

@@ -58,7 +58,6 @@ bool shouldVectorize(
 
   // Don't vectorize 0-dim tensors
   if (root_dom.size() == 0) {
-    std::cout << "No 0" << std::endl;
     return false;
   }
 
@@ -66,7 +65,6 @@ bool shouldVectorize(
 
   // Make sure inner most dimension is in the vector_dim set
   if (vector_dims.count(inner_most_dim) == 0) {
-    std::cout << "No 1" << std::endl;
     return false;
   }
 
@@ -85,11 +83,9 @@ bool shouldVectorize(
 
   // Don't vectorize if inner most dimension is not contiguous
   if (!contiguity[inner_most_dim_pos]) {
-    std::cout << "No 2" << std::endl;
     return false;
   }
 
-  std::cout << "Yes 3" << std::endl;
   return true;
 }
 
@@ -199,7 +195,6 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
       scheduler_utils::FindAllMappedDims::from(largest_out, inner_most_id);
 
   for (auto tv_inp : ir_utils::filterByType<TensorView>(fusion->inputs())) {
-    std::cout << "Should vectorize?: " << tv_inp << std::endl;
     if (shouldVectorize(tv_inp, vectorizable_dims)) {
       const auto inp_vectorize_factor =
           runtime_info.getVectorizableWidth(tv_inp);
@@ -208,7 +203,6 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
   }
 
   for (auto output_tv : out_tvs) {
-    std::cout << "Should vectorize?: " << output_tv << std::endl;
     if (shouldVectorize(output_tv, vectorizable_dims)) {
       const auto out_vectorize_factor =
           runtime_info.getVectorizableWidth(output_tv);
@@ -352,7 +346,6 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
       continue;
     }
     // Need to check before caching.
-    std::cout << "Vectorize 2? " << inp << std::endl;
     bool vectorize =
         params.vectorize && shouldVectorize(inp, vectorizable_dims);
     cached_inputs.emplace_back(inp->cache_after());
@@ -367,7 +360,6 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
       continue;
     }
     // Need to check before caching.
-    std::cout << "Vectorize 2? " << out << std::endl;
     bool vectorize =
         params.vectorize && shouldVectorize(out, vectorizable_dims);
     cached_outputs.emplace_back(std::make_pair(out, out->cache_before()));
@@ -523,8 +515,6 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
 
   scheduler_utils::computeAtBetween(
       compute_from, compute_to, -1, ComputeAtMode::BestEffort);
-
-  // std::cout<<"End schedule pointwise"<<std::endl;
 }
 
 } // namespace cuda
