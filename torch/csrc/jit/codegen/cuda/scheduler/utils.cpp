@@ -1287,6 +1287,98 @@ void multiReductionInliner(
   }
 }
 
+FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
+    : starting_tv(from), starting_id(id) {
+  std::deque<TensorView*> to_visit{starting_tv};
+  std::unordered_set<TensorView*> visited;
+  mapped_ids.emplace(std::make_pair(starting_tv, starting_id));
+  starting_tv->fusion()->printMath();
+  // Propagate mapping of id
+  while (!to_visit.empty()) {
+    auto tv = to_visit.front();
+    to_visit.pop_front();
+
+    if (!visited.emplace(tv).second) {
+      continue;
+    }
+
+    auto tv_id = mapped_ids.at(tv);
+    std::cout << "Prop: " << id << " from tv: " << tv << std::endl;
+
+    for (auto consumer_tv : consumerTvsOf(tv)) {
+      if (visited.find(consumer_tv) != visited.end()) {
+        continue;
+      }
+
+      if (mapped_ids.find(consumer_tv) != mapped_ids.end()) {
+        continue;
+      }
+
+      std::cout << "To consumer: " << consumer_tv << std::endl;
+
+      PairwiseRootDomainMap root_map(tv, consumer_tv);
+      auto p2c_map =
+          root_map.mapProducerToConsumer(tv->domain(), consumer_tv->domain());
+
+      auto c_it = p2c_map.find(tv_id);
+      if (c_it != p2c_map.end()) {
+        mapped_ids.emplace(std::make_pair(consumer_tv, c_it->second));
+        to_visit.emplace_back(consumer_tv);
+        std::cout << "Found: " << c_it->second << std::endl;
+      } else {
+        std::cout << "Not found" << std::endl;
+      }
+    }
+
+    for (auto producer_tv : producerTvsOf(tv)) {
+      if (visited.find(producer_tv) != visited.end()) {
+        continue;
+      }
+
+      if (mapped_ids.find(producer_tv) != mapped_ids.end()) {
+        continue;
+      }
+
+      std::cout << "To producer: " << producer_tv << std::endl;
+      PairwiseRootDomainMap root_map(producer_tv, tv);
+      auto c2p_map =
+          root_map.mapConsumerToProducer(tv->domain(), producer_tv->domain());
+      auto p_it = c2p_map.find(tv_id);
+      if (p_it != c2p_map.end()) {
+        mapped_ids.emplace(std::make_pair(producer_tv, p_it->second));
+        to_visit.emplace_back(producer_tv);
+        std::cout << "Found: " << p_it->second << std::endl;
+      } else {
+        std::cout << "Not found" << std::endl;
+      }
+    }
+  }
+}
+
+std::unordered_set<IterDomain*> FindAllMappedDims::from(
+    TensorView* tv,
+    IterDomain* id) {
+  TORCH_INTERNAL_ASSERT(
+      std::find_if(
+          tv->getRootDomain().begin(),
+          tv->getRootDomain().end(),
+          [&id](IterDomain* root_id) { return root_id == id; }) !=
+          tv->getRootDomain().end(),
+      "Tried to map out ",
+      id,
+      " from TV ",
+      tv,
+      " to the rest of the fusion, but id does not belong to this tv.");
+
+  FindAllMappedDims mapped_dims(tv, id);
+
+  std::unordered_set<IterDomain*> mapped_id_set;
+  for (auto entry : mapped_dims.mapped_ids) {
+    mapped_id_set.emplace(entry.second);
+  }
+  return mapped_id_set;
+}
+
 } // namespace scheduler_utils
 } // namespace cuda
 } // namespace fuser

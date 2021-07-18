@@ -212,6 +212,22 @@ void multiReductionInliner(
     std::vector<TensorView*> cached_inputs,
     std::vector<std::pair<TensorView*, TensorView*>> cached_outputs);
 
+// Uses a lot of logic from TransformPropagator in the implementation
+class FindAllMappedDims {
+ private:
+  FindAllMappedDims(TensorView* from, IterDomain* starting_id);
+
+ private:
+  std::unordered_map<TensorView*, IterDomain*> mapped_ids;
+  TensorView* starting_tv = nullptr;
+  IterDomain* starting_id = nullptr;
+
+ public:
+  // Looks through fusion and finds all dims that match to the one provided in
+  // the tensorview provided. Iter domain must be a root domain.
+  static std::unordered_set<IterDomain*> from(TensorView* tv, IterDomain* id);
+};
+
 } // namespace scheduler_utils
 } // namespace cuda
 } // namespace fuser

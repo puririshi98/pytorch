@@ -44,36 +44,52 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
 }
 
 namespace {
+// TODO: Revise comment
 // Want to make sure this is consistent across heuristics and scheduling.
 // Based on fusion information only. Does this TV have all dimensions of the
 // fusion. Does it have an iter domain for its inner most dimension. For
 // heuristics this information should be augmented by actual input information.
 // i.e. true from this function is required but not sufficient
-bool shouldVectorize(TensorView* tv, int64_t max_dims) {
-  const auto& root_dom =
-      TensorDomain::noReductions(tv->getMaybeRFactorDomain());
+bool shouldVectorize(
+    TensorView* tv,
+    std::unordered_set<IterDomain*> vector_dims) {
+  const auto& root_dom = TensorDomain::noBroadcasts(
+      TensorDomain::noReductions(tv->getRootDomain()));
 
   // Don't vectorize 0-dim tensors
   if (root_dom.size() == 0) {
+    std::cout << "No 0" << std::endl;
     return false;
   }
 
-  // Don't vectorize tensors that don't have all dimensions in the fusion
-  if (root_dom.size() != (size_t)max_dims) {
+  auto inner_most_dim = root_dom[root_dom.size() - 1];
+
+  // Make sure inner most dimension is in the vector_dim set
+  if (vector_dims.count(inner_most_dim) == 0) {
+    std::cout << "No 1" << std::endl;
     return false;
   }
 
-  // Don't vectorize if inner most dimension is a broadcast
-  if (root_dom[root_dom.size() - 1]->isBroadcast()) {
-    return false;
-  }
+  auto root_pos_it = std::find_if(
+      tv->getRootDomain().begin(),
+      tv->getRootDomain().end(),
+      [&inner_most_dim](IterDomain* id) { return inner_most_dim == id; });
+
+  TORCH_INTERNAL_ASSERT(root_pos_it != tv->getRootDomain().end());
+  auto inner_most_dim_pos =
+      std::distance(tv->getRootDomain().begin(), root_pos_it);
 
   const auto& contiguity = tv->domain()->contiguity();
+
+  TORCH_INTERNAL_ASSERT(contiguity.size() == tv->getRootDomain().size());
+
   // Don't vectorize if inner most dimension is not contiguous
-  if (!contiguity[contiguity.size() - 1]) {
+  if (!contiguity[inner_most_dim_pos]) {
+    std::cout << "No 2" << std::endl;
     return false;
   }
 
+  std::cout << "Yes 3" << std::endl;
   return true;
 }
 
@@ -107,7 +123,7 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
     }
   }
 
-  TORCH_INTERNAL_ASSERT(largest_out != nullptr);
+  TORCH_INTERNAL_ASSERT(largest_out != nullptr && largest_out->nDims());
 
   int64_t n_elems = 1;
   for (auto id : largest_out->getMaybeRFactorDomain()) {
@@ -164,8 +180,27 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
   // Vectorize as much as we can
   size_t vectorize_factor = max_unroll_factor;
 
+  IterDomain* inner_most_id = nullptr;
+  for (auto it = largest_out->domain()->domain().rbegin();
+       it != largest_out->domain()->domain().rend();
+       it++) {
+    if ((*it)->isReduction()) {
+      continue;
+    }
+    if ((*it)->isBroadcast() && inner_most_id == nullptr) {
+      inner_most_id = *it;
+    }
+    inner_most_id = *it;
+    break;
+  }
+
+  TORCH_INTERNAL_ASSERT(inner_most_id != nullptr);
+  auto vectorizable_dims =
+      scheduler_utils::FindAllMappedDims::from(largest_out, inner_most_id);
+
   for (auto tv_inp : ir_utils::filterByType<TensorView>(fusion->inputs())) {
-    if (shouldVectorize(tv_inp, max_dims)) {
+    std::cout << "Should vectorize?: " << tv_inp << std::endl;
+    if (shouldVectorize(tv_inp, vectorizable_dims)) {
       const auto inp_vectorize_factor =
           runtime_info.getVectorizableWidth(tv_inp);
       vectorize_factor = std::min(vectorize_factor, inp_vectorize_factor);
@@ -173,7 +208,8 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
   }
 
   for (auto output_tv : out_tvs) {
-    if (shouldVectorize(output_tv, max_dims)) {
+    std::cout << "Should vectorize?: " << output_tv << std::endl;
+    if (shouldVectorize(output_tv, vectorizable_dims)) {
       const auto out_vectorize_factor =
           runtime_info.getVectorizableWidth(output_tv);
       vectorize_factor = std::min(vectorize_factor, out_vectorize_factor);
@@ -268,37 +304,6 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
     return;
   }
 
-  // Caches of inputs
-  std::vector<TensorView*> cached_inputs;
-
-  // Output, cache_before of output
-  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
-
-  // Track what should be vectorized versus unrolled
-  std::unordered_set<TensorView*> vectorized_tensor;
-
-  // Figure out which inputs to cache for unrolling or vectorization
-  for (auto inp : input_tvs) {
-    if (inp->uses().empty()) {
-      continue;
-    }
-    cached_inputs.emplace_back(inp->cache_after());
-    if (params.vectorize && shouldVectorize(inp, max_dims)) {
-      vectorized_tensor.emplace(cached_inputs.back());
-    }
-  }
-
-  // Figure out which outputs to cache for unrolling or vectorization
-  for (auto out : output_tvs) {
-    if (out->definition() == nullptr) {
-      continue;
-    }
-    cached_outputs.emplace_back(std::make_pair(out, out->cache_before()));
-    if (params.vectorize && shouldVectorize(out, max_dims)) {
-      vectorized_tensor.emplace(out);
-    }
-  }
-
   TensorView* reference_tv = nullptr;
   for (auto out : output_tvs) {
     if (out->definition() == nullptr) {
@@ -313,6 +318,63 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
   TORCH_INTERNAL_ASSERT(
       reference_tv != nullptr,
       "Could not find a fully broadcasted output to reference schedule on.");
+
+  IterDomain* inner_most_id = nullptr;
+  for (auto it = reference_tv->domain()->domain().rbegin();
+       it != reference_tv->domain()->domain().rend();
+       it++) {
+    if ((*it)->isReduction()) {
+      continue;
+    }
+    if ((*it)->isBroadcast() && inner_most_id == nullptr) {
+      inner_most_id = *it;
+    }
+    inner_most_id = *it;
+    break;
+  }
+
+  TORCH_INTERNAL_ASSERT(inner_most_id != nullptr);
+  auto vectorizable_dims =
+      scheduler_utils::FindAllMappedDims::from(reference_tv, inner_most_id);
+
+  // Caches of inputs
+  std::vector<TensorView*> cached_inputs;
+
+  // Output, cache_before of output
+  std::vector<std::pair<TensorView*, TensorView*>> cached_outputs;
+
+  // Track what should be vectorized versus unrolled
+  std::unordered_set<TensorView*> vectorized_tensor;
+
+  // Figure out which inputs to cache for unrolling or vectorization
+  for (auto inp : input_tvs) {
+    if (inp->uses().empty()) {
+      continue;
+    }
+    // Need to check before caching.
+    std::cout << "Vectorize 2? " << inp << std::endl;
+    bool vectorize =
+        params.vectorize && shouldVectorize(inp, vectorizable_dims);
+    cached_inputs.emplace_back(inp->cache_after());
+    if (vectorize) {
+      vectorized_tensor.emplace(cached_inputs.back());
+    }
+  }
+
+  // Figure out which outputs to cache for unrolling or vectorization
+  for (auto out : output_tvs) {
+    if (out->definition() == nullptr) {
+      continue;
+    }
+    // Need to check before caching.
+    std::cout << "Vectorize 2? " << out << std::endl;
+    bool vectorize =
+        params.vectorize && shouldVectorize(out, vectorizable_dims);
+    cached_outputs.emplace_back(std::make_pair(out, out->cache_before()));
+    if (vectorize) {
+      vectorized_tensor.emplace(out);
+    }
+  }
 
   auto all_tvs = scheduler_utils::allTvs(fusion);
 
