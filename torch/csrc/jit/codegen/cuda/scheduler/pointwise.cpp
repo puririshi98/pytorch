@@ -43,54 +43,6 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
   return getPointwiseHeuristics(fusion, runtime_info);
 }
 
-namespace {
-// TODO: Revise comment
-// Want to make sure this is consistent across heuristics and scheduling.
-// Based on fusion information only. Does this TV have all dimensions of the
-// fusion. Does it have an iter domain for its inner most dimension. For
-// heuristics this information should be augmented by actual input information.
-// i.e. true from this function is required but not sufficient
-bool shouldVectorize(
-    TensorView* tv,
-    std::unordered_set<IterDomain*> vector_dims) {
-  const auto& root_dom = TensorDomain::noBroadcasts(
-      TensorDomain::noReductions(tv->getRootDomain()));
-
-  // Don't vectorize 0-dim tensors
-  if (root_dom.size() == 0) {
-    return false;
-  }
-
-  auto inner_most_dim = root_dom[root_dom.size() - 1];
-
-  // Make sure inner most dimension is in the vector_dim set
-  if (vector_dims.count(inner_most_dim) == 0) {
-    return false;
-  }
-
-  auto root_pos_it = std::find_if(
-      tv->getRootDomain().begin(),
-      tv->getRootDomain().end(),
-      [&inner_most_dim](IterDomain* id) { return inner_most_dim == id; });
-
-  TORCH_INTERNAL_ASSERT(root_pos_it != tv->getRootDomain().end());
-  auto inner_most_dim_pos =
-      std::distance(tv->getRootDomain().begin(), root_pos_it);
-
-  const auto& contiguity = tv->domain()->contiguity();
-
-  TORCH_INTERNAL_ASSERT(contiguity.size() == tv->getRootDomain().size());
-
-  // Don't vectorize if inner most dimension is not contiguous
-  if (!contiguity[inner_most_dim_pos]) {
-    return false;
-  }
-
-  return true;
-}
-
-} // namespace
-
 c10::optional<PointwiseParams> getPointwiseHeuristics(
     Fusion* fusion,
     SchedulerRuntimeInfo& runtime_info) {
@@ -176,40 +128,12 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
   // Vectorize as much as we can
   size_t vectorize_factor = max_unroll_factor;
 
-  IterDomain* inner_most_id = nullptr;
-  for (auto it = largest_out->domain()->domain().rbegin();
-       it != largest_out->domain()->domain().rend();
-       it++) {
-    if ((*it)->isReduction()) {
-      continue;
-    }
-    if ((*it)->isBroadcast() && inner_most_id == nullptr) {
-      inner_most_id = *it;
-    }
-    inner_most_id = *it;
-    break;
-  }
+  auto vectorizable_inputs_outputs =
+      scheduler_utils::getVectorizableInputsOutputs(largest_out);
 
-  // Could have a 0 dim fusion
-  if (inner_most_id != nullptr) {
-    auto vectorizable_dims =
-        scheduler_utils::FindAllMappedDims::from(largest_out, inner_most_id);
-
-    for (auto tv_inp : ir_utils::filterByType<TensorView>(fusion->inputs())) {
-      if (shouldVectorize(tv_inp, vectorizable_dims)) {
-        const auto inp_vectorize_factor =
-            runtime_info.getVectorizableWidth(tv_inp);
-        vectorize_factor = std::min(vectorize_factor, inp_vectorize_factor);
-      }
-    }
-
-    for (auto output_tv : out_tvs) {
-      if (shouldVectorize(output_tv, vectorizable_dims)) {
-        const auto out_vectorize_factor =
-            runtime_info.getVectorizableWidth(output_tv);
-        vectorize_factor = std::min(vectorize_factor, out_vectorize_factor);
-      }
-    }
+  for (auto tv : vectorizable_inputs_outputs) {
+    const auto tv_vectorize_factor = runtime_info.getVectorizableWidth(tv);
+    vectorize_factor = std::min(vectorize_factor, tv_vectorize_factor);
   }
 
   if (vectorize_factor == 1) {
@@ -348,8 +272,8 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
       continue;
     }
     // Need to check before caching.
-    bool vectorize =
-        params.vectorize && shouldVectorize(inp, vectorizable_dims);
+    bool vectorize = params.vectorize &&
+        scheduler_utils::shouldVectorize(inp, vectorizable_dims);
     cached_inputs.emplace_back(inp->cache_after());
     if (vectorize) {
       vectorized_tensor.emplace(cached_inputs.back());
@@ -362,8 +286,8 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
       continue;
     }
     // Need to check before caching.
-    bool vectorize =
-        params.vectorize && shouldVectorize(out, vectorizable_dims);
+    bool vectorize = params.vectorize &&
+        scheduler_utils::shouldVectorize(out, vectorizable_dims);
     cached_outputs.emplace_back(std::make_pair(out, out->cache_before()));
     if (vectorize) {
       vectorized_tensor.emplace(out);

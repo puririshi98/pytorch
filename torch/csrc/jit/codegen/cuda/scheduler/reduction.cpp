@@ -4,6 +4,7 @@
 #include <torch/csrc/jit/codegen/cuda/instrumentation.h>
 #include <torch/csrc/jit/codegen/cuda/ir_all_nodes.h>
 #include <torch/csrc/jit/codegen/cuda/ir_utils.h>
+#include <torch/csrc/jit/codegen/cuda/scheduler/registry.h>
 #include <torch/csrc/jit/codegen/cuda/scheduler/utils.h>
 #include <torch/csrc/jit/codegen/cuda/transform_replay.h>
 
@@ -540,41 +541,36 @@ ReductionParams reductionHeuristic(
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& fusion_inputs) {
+    const at::ArrayRef<c10::IValue>& runtime_inputs) {
   FUSER_PERF_SCOPE("getReductionHeuristics");
 
-  auto evaluator = executor_utils::bindFusionInputs(fusion_inputs, fusion);
+  SchedulerRuntimeInfo runtime_info(fusion, runtime_inputs, true);
 
-  return getReductionHeuristics(fusion, evaluator);
+  return getReductionHeuristics(fusion, runtime_info);
 }
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
     Fusion* fusion,
-    ExpressionEvaluator& evaluator) {
+    SchedulerRuntimeInfo& runtime_info) {
   FUSER_PERF_SCOPE("getReductionHeuristics");
 
   FusionGuard fg(fusion);
   auto all_tvs = scheduler_utils::allTvs(fusion);
-  TensorView* reduction_tv = nullptr;
-  for (auto tv : all_tvs) {
-    if (tv->hasReduction() && !fusion->hasInput(tv)) {
-      if (reduction_tv == nullptr) {
-        reduction_tv = tv;
-      } else {
-        TORCH_INTERNAL_ASSERT(
-            reduction_tv->definition() == tv->definition(),
-            "Found multiple reductions sent to reduction heuristics",
-            " (and reductions are not from a multi-output expr).");
-      }
-    }
-  }
+
+  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
+
+  TORCH_INTERNAL_ASSERT(
+      reduction_tvs.size() == 1, "Need reduction tensor views to schedule.");
+
+  auto reduction_tv = reduction_tvs[0];
 
   TORCH_INTERNAL_ASSERT(reduction_tv != nullptr);
 
   auto red_root_dom = reduction_tv->getRootDomain();
   bool fastest_dim_reduction = true;
   for (size_t i = red_root_dom.size(); i > 0; i--) {
-    if (red_root_dom[i - 1]->isBroadcast()) {
+    if (red_root_dom[i - 1]->isBroadcast() ||
+        red_root_dom[i - 1]->isTrivialReduction()) {
       continue;
     } else if (red_root_dom[i - 1]->isReduction()) {
       fastest_dim_reduction = true;
@@ -602,7 +598,8 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
   int64_t red_elements = 1;
 
   for (auto id : reduction_tv->getRootDomain()) {
-    auto inferred_val = evaluator.evaluate(id->extent());
+    auto inferred_val =
+        runtime_info.expressionEvaluator().evaluate(id->extent());
     TORCH_INTERNAL_ASSERT(
         inferred_val.has_value(), "Error inferring reduction size.");
     if (id->isReduction()) {

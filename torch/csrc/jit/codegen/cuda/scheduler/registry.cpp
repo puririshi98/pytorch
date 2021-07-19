@@ -607,10 +607,7 @@ class SingleReductionScheduler : public SchedulerEntry {
     auto dependent_vals = DependencyCheck::getAllDependentVals({red_tv});
     for (auto val : dependent_vals) {
       if (val->definition()->isA<BroadcastOp>() && !val->uses().empty()) {
-        // fusion->printMath();
-        // TORCH_INTERNAL_ASSERT(false, "Should have been caught before.");
         return false;
-        // fusion->printMath();
       }
     }
 
@@ -624,8 +621,7 @@ class SingleReductionScheduler : public SchedulerEntry {
 
  private:
   void computeHeuristics(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
-    auto& expr_evaluator = runtime_info.expressionEvaluator();
-    auto param = getReductionHeuristics(fusion, expr_evaluator);
+    auto param = getReductionHeuristics(fusion, runtime_info);
     TORCH_INTERNAL_ASSERT(param.has_value());
     rparams_ = param.value();
   }
@@ -673,7 +669,6 @@ class NormalizationScheduler : public SchedulerEntry {
   }
 
   static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
-    // auto & expr_evaluator = runtime_info.expressionEvaluator();
     std::vector<TensorView*> reduction_tvs;
     for (auto tv : scheduler_utils::allTvs(fusion)) {
       if (tv->hasReduction() && !fusion->hasInput(tv)) {
@@ -729,8 +724,8 @@ class NormalizationScheduler : public SchedulerEntry {
       }
     }
 
-    auto persistent_buffer_size = scheduler_utils::persistentBufferSize(
-        fusion, runtime_info.expressionEvaluator());
+    auto persistent_buffer_size =
+        scheduler_utils::persistentBufferSize(fusion, runtime_info);
     if (persistent_buffer_size * 4 > scheduler_utils::register_file_size * 3) {
       return false;
     }
@@ -755,8 +750,7 @@ class NormalizationScheduler : public SchedulerEntry {
 
  private:
   void computeHeuristics(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
-    auto& expr_evaluator = runtime_info.expressionEvaluator();
-    auto rparams = getNormalizationHeuristics(fusion, expr_evaluator);
+    auto rparams = getNormalizationHeuristics(fusion, runtime_info);
     TORCH_INTERNAL_ASSERT(rparams.has_value());
     rparams_ = rparams.value();
   }

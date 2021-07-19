@@ -5,6 +5,7 @@
 #include <torch/csrc/jit/codegen/cuda/ir_all_nodes.h>
 #include <torch/csrc/jit/codegen/cuda/ir_iostream.h>
 #include <torch/csrc/jit/codegen/cuda/ir_utils.h>
+#include <torch/csrc/jit/codegen/cuda/scheduler/registry.h>
 #include <torch/csrc/jit/codegen/cuda/scheduler/utils.h>
 #include <torch/csrc/jit/codegen/cuda/transform_replay.h>
 
@@ -38,7 +39,8 @@ ReductionParams innerNormalizationHeuristic(
     const int64_t n_tensor_inputs,
     const int64_t max_input_dtype_size,
     bool persistence_required,
-    const int64_t max_persistent_buffer_size) {
+    const int64_t max_persistent_buffer_size,
+    size_t vectorize_factor) {
   // Set some targets for parallelization
   const int64_t n_elems = num_elems_in_reduction * num_outputs_for_reduction;
 
@@ -233,6 +235,14 @@ ReductionParams innerNormalizationHeuristic(
     unroll_factor *= 2;
   }
 
+  bool vectorize = false;
+
+  if (vectorize_factor > 1 && unroll_reduction) {
+    vectorize = true;
+    unroll_factor =
+        std::min(lastPow2(unroll_factor), (int64_t)vectorize_factor);
+  }
+
   ReductionParams rparams;
   rparams.fastest_dim = true;
   rparams.cross_block = true;
@@ -240,6 +250,7 @@ ReductionParams innerNormalizationHeuristic(
   rparams.multiple_reds_per_blk =
       bdimy > 1 || (!unroll_reduction && unroll_factor);
   rparams.loop_unroll = unroll_factor;
+  rparams.vectorize = vectorize;
   rparams.reduction_unroll = unroll_reduction;
   rparams.batches_per_block = batches_per_block;
   rparams.persistent_kernel = persistence_required;
@@ -277,7 +288,8 @@ ReductionParams OuterNormalizationHeuristic(
     const int64_t n_tensor_inputs,
     const int64_t max_input_dtype_size,
     bool persistence_required,
-    const int64_t max_persistent_buffer_size) {
+    const int64_t max_persistent_buffer_size,
+    size_t vectorize_factor) {
   // Set some targets for parallelization
 
   const int64_t n_elems = num_elems_in_reduction * num_outputs_for_reduction;
@@ -468,6 +480,15 @@ ReductionParams OuterNormalizationHeuristic(
       : batches_per_block + (kEight - batches_per_block % kEight);
 
   batches_per_block = std::min(round_up_8, round_up_pow2);
+
+  bool vectorize = false;
+
+  if (vectorize_factor > 1 && !unroll_reduction) {
+    vectorize = true;
+    unroll_factor =
+        std::min(lastPow2(unroll_factor), (int64_t)vectorize_factor);
+  }
+
   ReductionParams rparams;
   rparams.fastest_dim = false;
   rparams.cross_block = true;
@@ -475,17 +496,10 @@ ReductionParams OuterNormalizationHeuristic(
   rparams.multiple_reds_per_blk =
       bdimx > 1 || (!unroll_reduction && unroll_factor);
   rparams.loop_unroll = unroll_factor;
+  rparams.vectorize = vectorize;
   rparams.reduction_unroll = unroll_reduction;
   rparams.batches_per_block = batches_per_block;
   rparams.persistent_kernel = persistence_required;
-
-  // WAR as it seems nvcc is doing some strange unrolling behavior in
-  // this scenario for fp16 small reduction dim large iter dim. Needs more
-  // investigation.
-  if (!rparams.cross_block) {
-    rparams.loop_unroll = 1;
-    rparams.reduction_unroll = true;
-  }
 
   rparams.lparams = LaunchParams(
       LaunchParams::UNINITIALIZED_VAL,
@@ -515,7 +529,8 @@ ReductionParams NormalizationHeuristic(
     size_t n_tensor_inputs,
     size_t max_input_dtype_size,
     bool persistence_required,
-    const int64_t max_persistent_buffer_size) {
+    const int64_t max_persistent_buffer_size,
+    size_t vectorize_factor) {
   if (fastest_dim_reduction) {
     return innerNormalizationHeuristic(
         num_elems_in_reduction,
@@ -523,7 +538,8 @@ ReductionParams NormalizationHeuristic(
         n_tensor_inputs,
         max_input_dtype_size,
         persistence_required,
-        max_persistent_buffer_size);
+        max_persistent_buffer_size,
+        vectorize_factor);
   } else {
     return OuterNormalizationHeuristic(
         num_elems_in_reduction,
@@ -531,23 +547,19 @@ ReductionParams NormalizationHeuristic(
         n_tensor_inputs,
         max_input_dtype_size,
         persistence_required,
-        max_persistent_buffer_size);
+        max_persistent_buffer_size,
+        vectorize_factor);
   }
 }
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
     Fusion* fusion,
-    ExpressionEvaluator& evaluator) {
+    SchedulerRuntimeInfo& runtime_info) {
   FUSER_PERF_SCOPE("getNormalizationHeuristics");
 
   FusionGuard fg(fusion);
 
-  std::vector<TensorView*> reduction_tvs;
-  for (auto tv : scheduler_utils::allTvs(fusion)) {
-    if (tv->hasReduction() && !fusion->hasInput(tv)) {
-      reduction_tvs.push_back(tv);
-    }
-  }
+  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
 
   TORCH_INTERNAL_ASSERT(
       !reduction_tvs.empty(), "Need reduction tensor views to schedule.");
@@ -585,10 +597,25 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
   bool requires_persistence = !persistent_buffers.buffers.empty();
 
   auto properties =
-      scheduler_utils::getProperties(fusion, evaluator, first_red_tv);
+      scheduler_utils::getProperties(fusion, runtime_info, first_red_tv);
 
   auto max_persistent_size =
-      scheduler_utils::persistentBufferSize(fusion, evaluator);
+      scheduler_utils::persistentBufferSize(fusion, runtime_info);
+
+  auto vectorizable_inputs_outputs =
+      scheduler_utils::getVectorizableInputsOutputs(first_red_tv);
+
+  // Vectorize as much as we can
+  size_t vectorize_factor = std::numeric_limits<size_t>::max();
+
+  for (auto tv : vectorizable_inputs_outputs) {
+    const auto tv_vectorize_factor = runtime_info.getVectorizableWidth(tv);
+    vectorize_factor = std::min(vectorize_factor, tv_vectorize_factor);
+  }
+
+  if (vectorize_factor == std::numeric_limits<size_t>::max()) {
+    vectorize_factor = 1;
+  }
 
   return NormalizationHeuristic(
       properties.reduction_numel,
@@ -597,18 +624,18 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
       n_tensor_inputs,
       max_dtype_size,
       requires_persistence,
-      max_persistent_size);
+      max_persistent_size,
+      vectorize_factor);
 }
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& fusion_inputs) {
+    const at::ArrayRef<c10::IValue>& runtime_inputs) {
   FUSER_PERF_SCOPE("getNormalizationHeuristics");
-
-  auto evaluator = executor_utils::bindFusionInputs(fusion_inputs, fusion);
-
-  return getNormalizationHeuristics(fusion, evaluator);
+  SchedulerRuntimeInfo runtime_info(fusion, runtime_inputs, true);
+  return getNormalizationHeuristics(fusion, runtime_info);
 }
+
 namespace {
 
 void schedulePersistentNormalization(

@@ -10,7 +10,6 @@ namespace jit {
 namespace fuser {
 namespace cuda {
 
-class ExpressionEvaluator;
 class SchedulerRuntimeInfo;
 
 TORCH_CUDA_CU_API c10::optional<PointwiseParams> getPointwiseHeuristics(

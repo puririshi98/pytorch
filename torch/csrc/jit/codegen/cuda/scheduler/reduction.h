@@ -8,15 +8,15 @@ namespace jit {
 namespace fuser {
 namespace cuda {
 
-class ExpressionEvaluator;
+class SchedulerRuntimeInfo;
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& fusion_inputs);
+    const at::ArrayRef<c10::IValue>& runtime_inputs);
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
     Fusion* fusion,
-    ExpressionEvaluator& evaluator);
+    SchedulerRuntimeInfo& runtime_info);
 
 TORCH_CUDA_CU_API void scheduleReduction(
     Fusion* fusion,

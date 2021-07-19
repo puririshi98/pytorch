@@ -7,7 +7,6 @@ namespace jit {
 namespace fuser {
 namespace cuda {
 
-class ExpressionEvaluator;
 class SchedulerRuntimeInfo;
 
 namespace scheduler_utils {
@@ -134,7 +133,7 @@ struct TvProperties {
 // Fill TvProperties structure about tv
 TvProperties getProperties(
     Fusion* fusion,
-    ExpressionEvaluator& evaluator,
+    SchedulerRuntimeInfo& runtime_info,
     TensorView* tv);
 
 // Will call computeAt once on each producer, with the first consumer found that
@@ -162,7 +161,7 @@ void computeAtBetween(
 // hold persistent dimension.
 int64_t persistentBufferSize(
     Fusion* fusion,
-    torch::jit::fuser::cuda::ExpressionEvaluator& expr_eval);
+    SchedulerRuntimeInfo& runtime_info);
 
 // Returns a set of all iteration domains (in roots of tensors) that map to a
 // trivial reduction
@@ -227,6 +226,18 @@ class FindAllMappedDims {
   // the tensorview provided. Iter domain must be a root domain.
   static std::unordered_set<IterDomain*> from(TensorView* tv, IterDomain* id);
 };
+
+// Checks if tensor view has an iteration domain in vector dims in its inner
+// most root position (excluding broadcast and reduction), and checks if it is a
+// contiguous dimension
+bool shouldVectorize(
+    TensorView* tv,
+    std::unordered_set<IterDomain*> vector_dims);
+
+// Returns all inputs and outputs that share the inner most dimension of the
+// provided reference. If reference is an input it ignores reduction axes, will
+// ignore all broadcast axes.
+std::vector<TensorView*> getVectorizableInputsOutputs(TensorView* reference_tv);
 
 } // namespace scheduler_utils
 } // namespace cuda
