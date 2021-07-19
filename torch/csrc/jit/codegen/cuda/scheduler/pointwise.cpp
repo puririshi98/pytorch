@@ -119,7 +119,7 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
     }
   }
 
-  TORCH_INTERNAL_ASSERT(largest_out != nullptr && largest_out->nDims());
+  TORCH_INTERNAL_ASSERT(largest_out != nullptr);
 
   int64_t n_elems = 1;
   for (auto id : largest_out->getMaybeRFactorDomain()) {
@@ -190,23 +190,25 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
     break;
   }
 
-  TORCH_INTERNAL_ASSERT(inner_most_id != nullptr);
-  auto vectorizable_dims =
-      scheduler_utils::FindAllMappedDims::from(largest_out, inner_most_id);
+  // Could have a 0 dim fusion
+  if (inner_most_id != nullptr) {
+    auto vectorizable_dims =
+        scheduler_utils::FindAllMappedDims::from(largest_out, inner_most_id);
 
-  for (auto tv_inp : ir_utils::filterByType<TensorView>(fusion->inputs())) {
-    if (shouldVectorize(tv_inp, vectorizable_dims)) {
-      const auto inp_vectorize_factor =
-          runtime_info.getVectorizableWidth(tv_inp);
-      vectorize_factor = std::min(vectorize_factor, inp_vectorize_factor);
+    for (auto tv_inp : ir_utils::filterByType<TensorView>(fusion->inputs())) {
+      if (shouldVectorize(tv_inp, vectorizable_dims)) {
+        const auto inp_vectorize_factor =
+            runtime_info.getVectorizableWidth(tv_inp);
+        vectorize_factor = std::min(vectorize_factor, inp_vectorize_factor);
+      }
     }
-  }
 
-  for (auto output_tv : out_tvs) {
-    if (shouldVectorize(output_tv, vectorizable_dims)) {
-      const auto out_vectorize_factor =
-          runtime_info.getVectorizableWidth(output_tv);
-      vectorize_factor = std::min(vectorize_factor, out_vectorize_factor);
+    for (auto output_tv : out_tvs) {
+      if (shouldVectorize(output_tv, vectorizable_dims)) {
+        const auto out_vectorize_factor =
+            runtime_info.getVectorizableWidth(output_tv);
+        vectorize_factor = std::min(vectorize_factor, out_vectorize_factor);
+      }
     }
   }
 
