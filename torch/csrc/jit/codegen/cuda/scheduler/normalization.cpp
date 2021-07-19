@@ -17,19 +17,6 @@ namespace fuser {
 namespace cuda {
 
 namespace {
-constexpr int64_t x_grid_limit = ((int64_t)1 << (int64_t)31) - (int64_t)1;
-// constexpr int64_t y_grid_limit = 65535; // unused at this time
-// Largest Power of 2 less-than n
-constexpr int64_t lastPow2(int64_t n) {
-  TORCH_INTERNAL_ASSERT(n >= 0);
-  n |= (n >> 1);
-  n |= (n >> 2);
-  n |= (n >> 4);
-  n |= (n >> 8); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
-  n |= (n >> 16); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
-  n |= (n >> 32); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
-  return std::max((int64_t)1, n - (n >> 1));
-}
 
 // Copied from reduction scheduler, should generalize. Simply needed to take out
 // grid reductions.
@@ -56,7 +43,9 @@ ReductionParams innerNormalizationHeuristic(
       // Available unrolling based on size of data type
       (int64_t)16 / (int64_t)max_input_dtype_size,
       // Reduce unrolling if we have many inputs, start reduction at 2 inputs
-      std::max((lastPow2((int64_t)n_tensor_inputs) >> 1), (int64_t)1));
+      std::max(
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
+          (int64_t)1));
 
   // Conservative value, could be set to larger based on arch if necessary.
   constexpr int64_t l1_cache = 32 * 1024;
@@ -216,7 +205,7 @@ ReductionParams innerNormalizationHeuristic(
       num_elems_in_reduction,
       bdimx * (unroll_reduction ? unroll_factor : (int64_t)1));
   // round up to multiple of 8 or pow2 whichever smaller
-  auto round_up_pow2 = lastPow2(batches_per_block);
+  auto round_up_pow2 = scheduler_utils::lastPow2(batches_per_block);
   if (round_up_pow2 < batches_per_block) {
     round_up_pow2 *= 2;
   }
@@ -237,10 +226,10 @@ ReductionParams innerNormalizationHeuristic(
 
   bool vectorize = false;
 
-  if (vectorize_factor > 1 && unroll_reduction) {
+  if (vectorize_factor > 1 && unroll_factor > 1 && unroll_reduction) {
     vectorize = true;
-    unroll_factor =
-        std::min(lastPow2(unroll_factor), (int64_t)vectorize_factor);
+    unroll_factor = std::min(
+        scheduler_utils::lastPow2(unroll_factor), (int64_t)vectorize_factor);
   }
 
   ReductionParams rparams;
@@ -259,7 +248,7 @@ ReductionParams innerNormalizationHeuristic(
   // gdimx assigned to grdim. Otherwise it's helpful to pull godim into gdimx in
   // case it's larger than gdimy can hold, as not doing so can thrash the cache.
 
-  rparams.split_grid_dim = godim > x_grid_limit;
+  rparams.split_grid_dim = godim > scheduler_utils::x_grid_limit;
 
   rparams.lparams = LaunchParams(
       LaunchParams::UNINITIALIZED_VAL,
@@ -317,7 +306,9 @@ ReductionParams OuterNormalizationHeuristic(
       // Available unrolling based on size of data type
       (int64_t)16 / (int64_t)max_input_dtype_size,
       // Reduce unrolling if we have many inputs, start reduction at 2 inputs
-      std::max((lastPow2((int64_t)n_tensor_inputs) >> 1), (int64_t)1));
+      std::max(
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
+          (int64_t)1));
 
   // If we have one warp per block, how many blocks would that be?
   target_blocks = ceilDiv(n_elems, (int64_t)warp_size);
@@ -468,7 +459,7 @@ ReductionParams OuterNormalizationHeuristic(
     // round up to multiple of 8 or pow2 whichever smaller
   }
 
-  auto round_up_pow2 = lastPow2(batches_per_block);
+  auto round_up_pow2 = scheduler_utils::lastPow2(batches_per_block);
   if (round_up_pow2 < batches_per_block) {
     round_up_pow2 *= 2;
   }
@@ -483,10 +474,10 @@ ReductionParams OuterNormalizationHeuristic(
 
   bool vectorize = false;
 
-  if (vectorize_factor > 1 && !unroll_reduction) {
+  if (vectorize_factor > 1 && unroll_factor > 1 && !unroll_reduction) {
     vectorize = true;
-    unroll_factor =
-        std::min(lastPow2(unroll_factor), (int64_t)vectorize_factor);
+    unroll_factor = std::min(
+        scheduler_utils::lastPow2(unroll_factor), (int64_t)vectorize_factor);
   }
 
   ReductionParams rparams;
