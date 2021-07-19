@@ -206,6 +206,71 @@ unsigned int getReplayablePosCasP(
   return 0;
 }
 
+unsigned int getInnermostNonBroadcastIdFrom(TensorView* tv) {
+  unsigned int ret = tv->getComputeAtPosition();
+
+  // Still assuming we only have block broadcast for now.
+  //  This part may change
+  while (ret > 0 && tv->axis(ret - 1)->isBroadcast()) {
+    ret--;
+  }
+
+  return ret;
+}
+
+// Try to find the aligned position on consumer's domain corresponding to the
+//  compute at position of producer domain. Used in computeAt pass only. No
+//  checking on actual producer-consumer relationship.
+unsigned int getConsumerPosAlignedToProducerCA(
+    TensorView* consumer,
+    TensorView* producer) {
+  unsigned int producer_ca_pos = producer->getComputeAtPosition();
+  // Locate consumer's position that aligns with
+  //  the producer's new compute at axis. We need broadcast axes forwarded so we
+  //  need to replay PasC as CasP will not forward braodcast dims. For example
+  //  if we have:
+  // T2[ iS22{( 3 * 1 )} ] ca_pos( 1 ) = broadcast( T1[ iS1{3} ] ca_pos( 1 )
+  // produce_pos( 1) ) CasP will have the mapping iS1{3} -> iS2{3} and PasC will
+  // have the mapping iS22{( 3 * 1 )} <- iS1{3} We need the latter. Refer to
+  // NVFuserTest.FusionComplexBCast1_CUDA
+
+  auto c2p_map =
+      BestEffortReplay::replayPasC(
+          producer,
+          consumer,
+          -1,
+          // Compute at root domain may not be valid here, as all
+          // producers don't have to be able to map into consumer at
+          // max producer position. Since computeAt should be valid
+          // and this mechanism is only intended to lower produce
+          // position of consumer, we can simply use the pairwise map.
+          PairwiseRootDomainMap(producer, consumer))
+          .getReplay();
+
+  // Find the innermost position of consumer that has
+  //  been mapped within the producer ca axis.
+  unsigned int consumer_pos = consumer->nDims();
+  while (consumer_pos > 0) {
+    auto consumer_id = consumer->axis(consumer_pos - 1);
+    auto p_dom = producer->domain()->domain();
+    if (std::any_of(
+            p_dom.begin(),
+            p_dom.begin() + producer->getComputeAtPosition(),
+            [&consumer_id, &c2p_map](IterDomain* p_id) {
+              auto c_id_it = c2p_map.find(consumer_id);
+              if (c_id_it != c2p_map.end()) {
+                return c_id_it->second == p_id;
+              }
+              return false;
+            })) {
+      break;
+    }
+    consumer_pos--;
+  }
+
+  return consumer_pos;
+}
+
 } // namespace
 
 void ComputeAt::runAt(
@@ -321,6 +386,13 @@ unsigned int ComputeAt::backwardComputeAt_impl(
     }
 
     consumer->setMaxProducer(consumer_compute_at_pos);
+    for (auto other_consumer : ir_utils::consumerTvsOf(producer)) {
+      if (other_consumer != consumer) {
+        auto max_consumer_pos =
+            getConsumerPosAlignedToProducerCA(other_consumer, producer);
+        other_consumer->setMaxProducer(max_consumer_pos);
+      }
+    }
     root_map_.setAlias(current_domain, new_domain);
   }
 
@@ -380,6 +452,13 @@ unsigned int ComputeAt::forwardComputeAt_impl(
 
     consumer->setDomain(new_domain);
     consumer->setMaxProducer(replay_consumer_pair.second);
+    for (auto other_consumer : ir_utils::consumerTvsOf(producer)) {
+      if (other_consumer != consumer) {
+        auto max_consumer_pos =
+            getConsumerPosAlignedToProducerCA(other_consumer, producer);
+        other_consumer->setMaxProducer(max_consumer_pos);
+      }
+    }
     root_map_.setAlias(current_domain, new_domain);
   }
 
@@ -508,75 +587,6 @@ void ComputeAt::traverseForward() {
   }
 }
 
-namespace {
-
-unsigned int getInnermostNonBroadcastIdFrom(TensorView* tv) {
-  unsigned int ret = tv->getComputeAtPosition();
-
-  // Still assuming we only have block broadcast for now.
-  //  This part may change
-  while (ret > 0 && tv->axis(ret - 1)->isBroadcast()) {
-    ret--;
-  }
-
-  return ret;
-}
-
-// Try to find the aligned position on consumer's domain corresponding to the
-//  compute at position of producer domain. Used in computeAt pass only. No
-//  checking on actual producer-consumer relationship.
-unsigned int getConsumerPosAlignedToProducerCA(
-    TensorView* consumer,
-    TensorView* producer) {
-  unsigned int producer_ca_pos = producer->getComputeAtPosition();
-  // Locate consumer's position that aligns with
-  //  the producer's new compute at axis. We need broadcast axes forwarded so we
-  //  need to replay PasC as CasP will not forward braodcast dims. For example
-  //  if we have:
-  // T2[ iS22{( 3 * 1 )} ] ca_pos( 1 ) = broadcast( T1[ iS1{3} ] ca_pos( 1 )
-  // produce_pos( 1) ) CasP will have the mapping iS1{3} -> iS2{3} and PasC will
-  // have the mapping iS22{( 3 * 1 )} <- iS1{3} We need the latter. Refer to
-  // NVFuserTest.FusionComplexBCast1_CUDA
-
-  auto c2p_map =
-      BestEffortReplay::replayPasC(
-          producer,
-          consumer,
-          consumer->getMaxProducerPosition(),
-          // Compute at root domain may not be valid here, as all
-          // producers don't have to be able to map into consumer at
-          // max producer position. Since computeAt should be valid
-          // and this mechanism is only intended to lower produce
-          // position of consumer, we can simply use the pairwise map.
-          PairwiseRootDomainMap(producer, consumer))
-          .getReplay();
-
-  // Find the innermost position of consumer that has
-  //  been mapped within the producer ca axis.
-  unsigned int consumer_pos = consumer->nDims();
-  while (consumer_pos > 0) {
-    auto consumer_id = consumer->axis(consumer_pos - 1);
-    auto p_dom = producer->domain()->domain();
-    if (std::any_of(
-            p_dom.begin(),
-            p_dom.begin() + producer->getComputeAtPosition(),
-            [&consumer_id, &c2p_map](IterDomain* p_id) {
-              auto c_id_it = c2p_map.find(consumer_id);
-              if (c_id_it != c2p_map.end()) {
-                return c_id_it->second == p_id;
-              }
-              return false;
-            })) {
-      break;
-    }
-    consumer_pos--;
-  }
-
-  return consumer_pos;
-}
-
-} // namespace
-
 void ComputeAt::hoistInnermostBroadcast() {
   auto fusion = producer_->fusion();
 
@@ -599,11 +609,8 @@ void ComputeAt::hoistInnermostBroadcast() {
       //  position update.
       // This is safe with segmented fusion. TV uses will reset
       //  when FusionSegmentGuard try to change the IO.
-      for (auto expr_consumer : fusion->unordered_uses(running_producer)) {
-        auto tv_consumers =
-            ir_utils::filterByType<TensorView>(expr_consumer->outputs());
-        consumers_to_update.insert(tv_consumers.begin(), tv_consumers.end());
-      }
+      auto tv_consumers = ir_utils::consumerTvsOf(running_producer);
+      consumers_to_update.insert(tv_consumers.begin(), tv_consumers.end());
     }
   }
 
