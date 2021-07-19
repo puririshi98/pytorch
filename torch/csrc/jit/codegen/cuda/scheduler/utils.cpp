@@ -746,10 +746,13 @@ TensorView* scheduleReductionTV(
         //                Reduction Dimensions
 
         if (rparams.vectorize) {
-        } else {
           reduction_tv->split(reduce_axis, rparams.loop_unroll);
           reduction_tv->split(
               reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
+        } else {
+          reduction_tv->split(
+              reduce_axis, NamedScalar::getParallelDim(ParallelType::TIDx));
+          reduction_tv->split(reduce_axis, rparams.loop_unroll);
         }
         reduction_tv->split(reduce_axis, 1);
         // Unswitch axis which gives us finer control on allocations with
@@ -765,8 +768,7 @@ TensorView* scheduleReductionTV(
                {reduce_axis + 1, reduce_axis},
                {reduce_axis + 2, reduce_axis + 1},
                {reduce_axis + 3, reduce_axis + 4},
-               {reduce_axis + 4, reduce_axis + 2},
-               {reduce_axis + 5, reduce_axis + 5}});
+               {reduce_axis + 4, reduce_axis + 2}});
         } else {
           reduction_tv->reorder(
               {{reduce_axis, reduce_axis + 3},
@@ -1160,10 +1162,8 @@ std::vector<std::pair<TensorView*, TensorView*>> cacheAndForkOutputs(
       continue;
     }
     if (!output->uses().empty()) {
-      if (output->getValType().value() == ValType::TensorView) {
-        auto cached_output = output->as<TensorView>()->cache_fork();
-        cached_outputs.push_back(std::make_pair(output, cached_output));
-      }
+      auto cached_output = output->as<TensorView>()->cache_fork();
+      cached_outputs.push_back(std::make_pair(output, cached_output));
     } else if (unroll) {
       auto cached_output = output->as<TensorView>()->cache_before();
       cached_outputs.push_back(std::make_pair(cached_output, output));
