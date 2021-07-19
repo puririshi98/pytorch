@@ -23,7 +23,8 @@ ReductionParams innerReductionHeuristic(
     const int64_t num_elems_in_reduction,
     const int64_t num_outputs_for_reduction,
     const int64_t n_input_tensors,
-    const int64_t max_input_dtype_size) {
+    const int64_t max_input_dtype_size,
+    size_t vectorize_factor) {
   // Set some targets for parallelization
 
   const int64_t n_elems = num_elems_in_reduction * num_outputs_for_reduction;
@@ -246,12 +247,21 @@ ReductionParams innerReductionHeuristic(
     }
   }
 
+  bool vectorize = false;
+
+  if (vectorize_factor > 1 && unroll_factor > 1 && unroll_reduction) {
+    vectorize = true;
+    unroll_factor = std::min(
+        scheduler_utils::lastPow2(unroll_factor), (int64_t)vectorize_factor);
+  }
+
   ReductionParams rparams;
   rparams.fastest_dim = true;
   rparams.cross_block = true;
   rparams.cross_grid = grdim > 1;
   rparams.multiple_reds_per_blk = bdimy > 1;
   rparams.loop_unroll = unroll_factor;
+  rparams.vectorize = vectorize;
   rparams.reduction_unroll = unroll_reduction;
 
   // If we have a cross grid case we want to have gdimy assigned to godim and
@@ -287,7 +297,8 @@ ReductionParams OuterReductionHeuristic(
     const int64_t num_elems_in_reduction,
     const int64_t num_outputs_for_reduction,
     const int64_t n_input_tensors,
-    const int64_t max_input_dtype_size) {
+    const int64_t max_input_dtype_size,
+    size_t vectorize_factor) {
   // Set some targets for parallelization
 
   const int64_t n_elems = num_elems_in_reduction * num_outputs_for_reduction;
@@ -483,6 +494,14 @@ ReductionParams OuterReductionHeuristic(
     }
   }
 
+  bool vectorize = false;
+
+  if (vectorize_factor > 1 && unroll_factor > 1 && !unroll_reduction) {
+    vectorize = true;
+    unroll_factor = std::min(
+        scheduler_utils::lastPow2(unroll_factor), (int64_t)vectorize_factor);
+  }
+
   ReductionParams rparams;
   rparams.fastest_dim = false;
   // cross grid implies cross block
@@ -490,6 +509,7 @@ ReductionParams OuterReductionHeuristic(
   rparams.cross_grid = gdimy > 1;
   rparams.multiple_reds_per_blk = bdimx > 1;
   rparams.loop_unroll = unroll_factor;
+  rparams.vectorize = vectorize;
   rparams.reduction_unroll = unroll_reduction;
 
   // WAR as it seems nvcc is doing some strange unrolling behavior in
@@ -523,19 +543,22 @@ ReductionParams reductionHeuristic(
     int64_t num_outputs_for_reduction,
     bool fastest_dim_reduction,
     size_t n_input_tensors,
-    size_t max_input_dtype_size) {
+    size_t max_input_dtype_size,
+    size_t vectorize_factor) {
   if (fastest_dim_reduction) {
     return innerReductionHeuristic(
         num_elems_in_reduction,
         num_outputs_for_reduction,
         n_input_tensors,
-        max_input_dtype_size);
+        max_input_dtype_size,
+        vectorize_factor);
   } else {
     return OuterReductionHeuristic(
         num_elems_in_reduction,
         num_outputs_for_reduction,
         n_input_tensors,
-        max_input_dtype_size);
+        max_input_dtype_size,
+        vectorize_factor);
   }
 }
 
@@ -623,12 +646,28 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
       n_input_tensors > 0,
       "Tried to schedule a fusion with no tensor inputs, currently not supported.");
 
+  auto vectorizable_inputs_outputs =
+      scheduler_utils::getVectorizableInputsOutputs(reduction_tv);
+
+  // Vectorize as much as we can
+  size_t vectorize_factor = std::numeric_limits<size_t>::max();
+
+  for (auto tv : vectorizable_inputs_outputs) {
+    const auto tv_vectorize_factor = runtime_info.getVectorizableWidth(tv);
+    vectorize_factor = std::min(vectorize_factor, tv_vectorize_factor);
+  }
+
+  if (vectorize_factor == std::numeric_limits<size_t>::max()) {
+    vectorize_factor = 1;
+  }
+
   return reductionHeuristic(
       red_elements,
       num_outputs_for_reduction,
       fastest_dim_reduction,
       n_input_tensors,
-      max_dtype_size);
+      max_dtype_size,
+      vectorize_factor);
 }
 
 // fusion is the input IR that will be modified by this function
