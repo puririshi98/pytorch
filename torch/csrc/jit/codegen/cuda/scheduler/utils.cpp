@@ -659,10 +659,9 @@ TensorView* scheduleReductionTV(
         if (rparams.vectorize) {
           reference_tv->axis(reduce_axis + 3)
               ->parallelize(ParallelType::Vectorize);
-        } else {
-          reference_tv->axis(reduce_axis + 2)
-              ->parallelize(ParallelType::Unswitch);
         }
+        reference_tv->axis(reduce_axis + 2)
+            ->parallelize(ParallelType::Unswitch);
 
         if (has_iter_axis) {
           reference_tv->split(
@@ -784,10 +783,9 @@ TensorView* scheduleReductionTV(
         if (rparams.vectorize) {
           reference_tv->axis(reduce_axis + 5)
               ->parallelize(ParallelType::Vectorize);
-        } else {
-          reference_tv->axis(reduce_axis + 4)
-              ->parallelize(ParallelType::Unswitch);
         }
+        reference_tv->axis(reduce_axis + 4)
+            ->parallelize(ParallelType::Unswitch);
 
         reference_tv->axis(reduce_axis + 2)->parallelize(ParallelType::TIDx);
         reference_tv->axis(reduce_axis + 1)->parallelize(ParallelType::TIDy);
@@ -870,10 +868,9 @@ TensorView* scheduleReductionTV(
         if (rparams.vectorize) {
           reference_tv->axis(reduce_axis + 3)
               ->parallelize(ParallelType::Vectorize);
-        } else {
-          reference_tv->axis(reduce_axis + 2)
-              ->parallelize(ParallelType::Unswitch);
         }
+        reference_tv->axis(reduce_axis + 2)
+            ->parallelize(ParallelType::Unswitch);
 
         if (has_iter_axis) {
           if (rparams.split_grid_dim) {
@@ -1037,9 +1034,8 @@ TensorView* scheduleReductionTV(
           reference_tv->axis(1)->parallelize(ParallelType::TIDx);
           if (rparams.vectorize) {
             reference_tv->axis(4)->parallelize(ParallelType::Vectorize);
-          } else {
-            reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
           }
+          reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
           reference_tv->axis(0)->parallelize(ParallelType::BIDx);
 
           reference_tv = reference_tv;
@@ -1110,9 +1106,8 @@ TensorView* scheduleReductionTV(
         reduction_tv->axis(1)->parallelize(ParallelType::TIDx);
         if (rparams.vectorize) {
           reduction_tv->axis(4)->parallelize(ParallelType::Vectorize);
-        } else {
-          reduction_tv->axis(3)->parallelize(ParallelType::Unswitch);
         }
+        reduction_tv->axis(3)->parallelize(ParallelType::Unswitch);
 
         reference_tv = reduction_tv;
       }
