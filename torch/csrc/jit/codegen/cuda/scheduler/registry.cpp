@@ -714,7 +714,7 @@ class NormalizationScheduler : public SchedulerEntry {
 
   static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
     std::vector<TensorView*> reduction_tvs;
-    for (auto tv : scheduler_utils::allTvs(fusion)) {
+    for (auto tv : ir_utils::allTvs(fusion)) {
       if (tv->hasReduction() && !fusion->hasInput(tv)) {
         reduction_tvs.push_back(tv);
       }

@@ -70,104 +70,6 @@ size_t mergeNonReduction(
   return prev_i == -1 ? 0 : num_merged + 1;
 }
 
-TensorView* rfactorHelper(
-    TensorView* reduction_tv,
-    const std::vector<int>& axes) {
-  TORCH_INTERNAL_ASSERT(reduction_tv->definition() != nullptr);
-  const bool is_welford = reduction_tv->definition()->isA<WelfordOp>();
-  if (!is_welford) {
-    return reduction_tv->rFactor(axes);
-  }
-  auto welford = reduction_tv->definition()->as<WelfordOp>();
-  auto w_avg = welford->outAvg()->as<TensorView>();
-  auto w_var = welford->outVar()->as<TensorView>();
-  auto w_n = welford->outN()->as<TensorView>();
-
-  WelfordResult rtvs = reduction_tv->rFactor(axes, w_avg, w_var, w_n);
-
-  // TODO: this can be more generic, using avg because
-  //      WelfordOp::out() returns the avg
-  return rtvs.avg;
-}
-
-namespace {
-
-std::vector<TensorView*> uniqueEntries(
-    const std::vector<TensorView*>& tv_deuqe) {
-  std::vector<TensorView*> unique_entries;
-  std::unordered_set<TensorView*> inserted;
-  for (auto tv_entry : tv_deuqe) {
-    if (inserted.emplace(tv_entry).second) {
-      unique_entries.emplace_back(tv_entry);
-    }
-  }
-  return unique_entries;
-}
-
-} // namespace
-
-std::vector<TensorView*> producerTvsOf(TensorView* tv) {
-  if (tv->definition() == nullptr) {
-    return {};
-  }
-  auto producer_vals =
-      ir_utils::filterByType<TensorView>(tv->definition()->inputs());
-  return uniqueEntries({producer_vals.begin(), producer_vals.end()});
-}
-
-std::vector<TensorView*> consumerTvsOf(TensorView* tv) {
-  std::vector<TensorView*> consumer_tvs;
-  for (auto use_expr : tv->uses()) {
-    auto outputs = ir_utils::filterByType<TensorView>(use_expr->outputs());
-    consumer_tvs.insert(consumer_tvs.end(), outputs.begin(), outputs.end());
-  }
-  return uniqueEntries(consumer_tvs);
-}
-
-std::vector<TensorView*> producerTvsOf(const std::vector<TensorView*>& tvs) {
-  std::vector<TensorView*> all_producer_tvs;
-  for (auto tv : tvs) {
-    auto producer_tvs = producerTvsOf(tv);
-    all_producer_tvs.insert(
-        all_producer_tvs.end(), producer_tvs.begin(), producer_tvs.end());
-  }
-
-  return uniqueEntries(all_producer_tvs);
-}
-
-std::vector<TensorView*> consumerTvsOf(const std::vector<TensorView*>& tvs) {
-  std::vector<TensorView*> all_consumer_tvs;
-  for (auto tv : tvs) {
-    auto consumer_tvs = consumerTvsOf(tv);
-    all_consumer_tvs.insert(
-        all_consumer_tvs.end(), consumer_tvs.begin(), consumer_tvs.end());
-  }
-
-  return uniqueEntries(all_consumer_tvs);
-}
-
-std::vector<TensorView*> inputTvsOf(TensorView* tv) {
-  return inputTvsOf(std::vector<TensorView*>{tv});
-}
-
-std::vector<TensorView*> outputTvsOf(TensorView* tv) {
-  return outputTvsOf(std::vector<TensorView*>{tv});
-}
-
-std::vector<TensorView*> inputTvsOf(std::vector<TensorView*> tvs) {
-  auto inp_vals = IterVisitor::getInputsTo({tvs.begin(), tvs.end()});
-  auto filtered = ir_utils::filterByType<TensorView>(inp_vals);
-  std::vector<TensorView*> inp_tvs(filtered.begin(), filtered.end());
-  return uniqueEntries(inp_tvs);
-}
-
-std::vector<TensorView*> outputTvsOf(std::vector<TensorView*> tvs) {
-  auto out_vals = DependencyCheck::getAllOutputsOf({tvs.begin(), tvs.end()});
-  auto filtered = ir_utils::filterByType<TensorView>(out_vals);
-  std::vector<TensorView*> out_tvs(filtered.begin(), filtered.end());
-  return uniqueEntries(out_tvs);
-}
-
 void parallelizeAllLike(
     TensorView* reference_tv,
     const std::vector<TensorView*>& all_tvs) {
@@ -191,13 +93,13 @@ void parallelizeAllLike(
 }
 
 void computeAtInputs(TensorView* consumer, int pos, ComputeAtMode mode) {
-  for (auto inp_tv : inputTvsOf(consumer)) {
+  for (auto inp_tv : ir_utils::inputTvsOf(consumer)) {
     inp_tv->computeAt(consumer, pos, mode);
   }
 }
 
 void computeWithOutputs(TensorView* producer, int pos, ComputeAtMode mode) {
-  for (auto out_tv : outputTvsOf(producer)) {
+  for (auto out_tv : ir_utils::outputTvsOf(producer)) {
     producer->computeWith(out_tv, pos, mode);
   }
 }
@@ -207,7 +109,7 @@ void computeWithOutputs(
     int pos,
     std::unordered_set<TensorView*> tv_filter,
     ComputeAtMode mode) {
-  for (auto out_tv : outputTvsOf(producer)) {
+  for (auto out_tv : ir_utils::outputTvsOf(producer)) {
     if (tv_filter.count(out_tv)) {
       producer->computeWith(out_tv, pos, mode);
     }
@@ -219,17 +121,11 @@ void computeAtOutputs(
     int pos,
     std::unordered_set<TensorView*> tv_filter,
     ComputeAtMode mode) {
-  for (auto out_tv : outputTvsOf(producer)) {
+  for (auto out_tv : ir_utils::outputTvsOf(producer)) {
     if (tv_filter.count(out_tv)) {
       producer->computeAt(out_tv, pos, mode);
     }
   }
-}
-
-std::vector<TensorView*> allTvs(Fusion* fusion) {
-  auto used_vals = fusion->usedMathVals();
-  auto used_tvs = ir_utils::filterByType<TensorView>(used_vals);
-  return uniqueEntries({used_tvs.begin(), used_tvs.end()});
 }
 
 PersistentBufferInfo persistentBuffers(Fusion* fusion) {
@@ -240,11 +136,11 @@ PersistentBufferInfo persistentBuffers(Fusion* fusion) {
   ComputeAtRootDomainMap root_map;
   root_map.build();
 
-  auto all_tvs = allTvs(fusion);
+  auto all_tvs = ir_utils::allTvs(fusion);
 
   for (auto producer : all_tvs) {
     bool mappable = true;
-    auto consumers = consumerTvsOf(producer);
+    auto consumers = ir_utils::consumerTvsOf(producer);
     if (consumers.empty()) {
       continue;
     }
@@ -418,7 +314,7 @@ void computeAtBetween(
 int64_t persistentBufferSize(
     Fusion* fusion,
     SchedulerRuntimeInfo& runtime_info) {
-  auto persistent_buffers = scheduler_utils::persistentBuffers(fusion);
+  auto persistent_buffers = persistentBuffers(fusion);
 
   if (persistent_buffers.buffers.empty()) {
     return 0;
@@ -467,7 +363,7 @@ int64_t persistentBufferSize(
     // as inlining loop structures where the persistent buffer is used should
     // prevent muiltiple persistent buffers from being merged togther if not
     // necessary.
-    auto consumers_of_tv = scheduler_utils::consumerTvsOf(tv);
+    auto consumers_of_tv = ir_utils::consumerTvsOf(tv);
     for (auto val : DependencyCheck::getAllValsBetween(
              {tv}, {consumers_of_tv.begin(), consumers_of_tv.end()})) {
       // Persistent normalization kernels imply that all persistent buffers
@@ -496,7 +392,7 @@ int64_t persistentBufferSize(
 }
 
 std::unordered_set<IterDomain*> getTrivialReductionMap(Fusion* fusion) {
-  auto all_tvs = allTvs(fusion);
+  auto all_tvs = ir_utils::allTvs(fusion);
   std::unordered_set<IterDomain*> mapped_to_trivial_reduction;
   for (auto tv : all_tvs) {
     // root domain vs domain shouldn't matter as at this point we shouldn't have
@@ -535,21 +431,19 @@ std::unordered_set<IterDomain*> getTrivialReductionMap(Fusion* fusion) {
 
 std::pair<bool, bool> canonicalDimReduction(Fusion* fusion, TensorView* tv) {
   std::unordered_set<IterDomain*> mapped_to_trivial_reduction =
-      scheduler_utils::getTrivialReductionMap(fusion);
+      getTrivialReductionMap(fusion);
 
   TORCH_INTERNAL_ASSERT(tv != nullptr);
 
   // We coalesce all reduction axes to the right;
-  bool has_red_axis =
-      scheduler_utils::mergeReduction(tv, mapped_to_trivial_reduction) > 0;
+  bool has_red_axis = mergeReduction(tv, mapped_to_trivial_reduction) > 0;
 
-  bool has_iter_axis =
-      scheduler_utils::mergeNonReduction(tv, mapped_to_trivial_reduction) > 0;
+  bool has_iter_axis = mergeNonReduction(tv, mapped_to_trivial_reduction) > 0;
   return {has_iter_axis, has_red_axis};
 }
 
 std::vector<TensorView*> getReductionTvs(Fusion* fusion) {
-  auto all_tvs = scheduler_utils::allTvs(fusion);
+  auto all_tvs = ir_utils::allTvs(fusion);
   std::vector<TensorView*> reduction_tvs;
   for (auto tv : all_tvs) {
     if (!tv->isFusionInput() &&
@@ -651,7 +545,7 @@ TensorView* scheduleReductionTV(
                {reduce_axis + 2, reduce_axis + 3}});
         }
 
-        reference_tv = scheduler_utils::rfactorHelper(
+        reference_tv = ir_utils::rfactorHelper(
             reduction_tv, {reduce_axis + 1, reduce_axis + 2, reduce_axis + 3});
 
         reference_tv->axis(reduce_axis)->parallelize(ParallelType::TIDx);
@@ -694,7 +588,7 @@ TensorView* scheduleReductionTV(
           reduction_tv->split(1, rparams.batches_per_block, false);
         }
 
-        reference_tv = scheduler_utils::rfactorHelper(reduction_tv, {1});
+        reference_tv = ir_utils::rfactorHelper(reduction_tv, {1});
 
         reference_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDy));
         reference_tv->split(0, rparams.loop_unroll);
@@ -779,7 +673,7 @@ TensorView* scheduleReductionTV(
                {reduce_axis + 5, reduce_axis + 2}});
         }
 
-        reference_tv = scheduler_utils::rfactorHelper(
+        reference_tv = ir_utils::rfactorHelper(
             reduction_tv, {reduce_axis + 3, reduce_axis + 4, reduce_axis + 5});
 
         if (rparams.vectorize) {
@@ -863,7 +757,7 @@ TensorView* scheduleReductionTV(
                {reduce_axis + 2, reduce_axis + 3}});
         }
 
-        reference_tv = scheduler_utils::rfactorHelper(
+        reference_tv = ir_utils::rfactorHelper(
             reduction_tv, {reduce_axis + 1, reduce_axis + 2, reduce_axis + 3});
 
         reference_tv->axis(reduce_axis)->parallelize(ParallelType::TIDx);
@@ -924,7 +818,7 @@ TensorView* scheduleReductionTV(
 
         reduction_tv->reorder({{2, 4}, {3, 2}, {4, 3}});
 
-        reference_tv = scheduler_utils::rfactorHelper(
+        reference_tv = ir_utils::rfactorHelper(
             reduction_tv,
             {4, 5, 6}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
@@ -969,7 +863,7 @@ TensorView* scheduleReductionTV(
 
           reduction_tv->reorder({{2, 3}, {3, 2}});
 
-          reference_tv = scheduler_utils::rfactorHelper(
+          reference_tv = ir_utils::rfactorHelper(
               reduction_tv,
               {3, 4, 5}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
@@ -1028,7 +922,7 @@ TensorView* scheduleReductionTV(
             reduction_tv->reorder({{1, 3}, {2, 4}, {3, 1}, {4, 2}});
           }
 
-          reference_tv = scheduler_utils::rfactorHelper(
+          reference_tv = ir_utils::rfactorHelper(
               reduction_tv,
               {2}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
@@ -1120,7 +1014,7 @@ TensorView* scheduleReductionTV(
 
 // Reset inputs and outputs to global memory, everything else to local.
 void clearMemorySpace(Fusion* fusion) {
-  for (auto tv : scheduler_utils::allTvs(fusion)) {
+  for (auto tv : ir_utils::allTvs(fusion)) {
     if (tv->isFusionInput() || tv->isFusionOutput()) {
       tv->setMemoryType(MemoryType::Global);
     } else {
@@ -1201,7 +1095,7 @@ void multiReductionInliner(
         continue;
       } else {
         rfactor_tvs.push_back(
-            scheduler_utils::rfactorHelper(reduction_tv_, rfactor_axes));
+            ir_utils::rfactorHelper(reduction_tv_, rfactor_axes));
       }
     }
 
@@ -1210,11 +1104,10 @@ void multiReductionInliner(
         "Expected all reductions to contain rfactor.");
   }
 
-  scheduler_utils::parallelizeAllLike(
-      reference_tv, scheduler_utils::allTvs(fusion));
+  parallelizeAllLike(reference_tv, ir_utils::allTvs(fusion));
 
   std::unordered_set<IterDomain*> mapped_to_trivial_reduction =
-      scheduler_utils::getTrivialReductionMap(fusion);
+      getTrivialReductionMap(fusion);
 
   if (rparams.loop_unroll > 1) {
     // Input to cached we want outside unswitched position
@@ -1228,8 +1121,7 @@ void multiReductionInliner(
 
     // Schedule unrolling on inputs
     for (auto cached_input : cached_inputs) {
-      auto consumers_of_input_cache =
-          scheduler_utils::consumerTvsOf(cached_input);
+      auto consumers_of_input_cache = ir_utils::consumerTvsOf(cached_input);
       for (auto consumer : consumers_of_input_cache) {
         auto unswitch_it = std::find_if(
             consumer->domain()->domain().begin(),
@@ -1249,7 +1141,7 @@ void multiReductionInliner(
             consumer, unswitch_pos, ComputeAtMode::BestEffort);
         compute_from.push_back(consumer);
         if (rparams.vectorize) {
-          auto producer_tvs = producerTvsOf(cached_input);
+          auto producer_tvs = ir_utils::producerTvsOf(cached_input);
           if (producer_tvs.size() == 1 &&
               std::find(
                   vecotrizable_inputs_outputs.begin(),
@@ -1277,7 +1169,7 @@ void multiReductionInliner(
         : std::distance(reference_tv->domain()->domain().begin(), pos_it) + 1;
 
     // Compute at inputs to rfactor dimensions
-    scheduler_utils::computeAtBetween(
+    computeAtBetween(
         compute_from, rfactor_tvs, pos, ComputeAtMode::MostInlined);
 
     // Inline rfactor into reduction
@@ -1371,7 +1263,7 @@ void multiReductionInliner(
       }
     }
 
-    scheduler_utils::computeAtBetween(
+    computeAtBetween(
         compute_from,
         compute_to,
         -1,
@@ -1380,7 +1272,7 @@ void multiReductionInliner(
 
     // Clear explicit unroll or vectorization when not for input or output GMEM
     // transfers.
-    for (auto tv : scheduler_utils::allTvs(fusion)) {
+    for (auto tv : ir_utils::allTvs(fusion)) {
       if (!keep_unrolled.count(tv)) {
         for (size_t i = 0; i < tv->nDims(); i++) {
           auto id = tv->axis((int)i);
@@ -1412,9 +1304,8 @@ void multiReductionInliner(
           ? -1
           : std::distance(red_tv->domain()->domain().begin(), pos_it) + 1;
 
-      scheduler_utils::computeAtInputs(red_tv, pos, ComputeAtMode::MostInlined);
-      scheduler_utils::computeWithOutputs(
-          red_tv, pos, ComputeAtMode::BestEffort);
+      computeAtInputs(red_tv, pos, ComputeAtMode::MostInlined);
+      computeWithOutputs(red_tv, pos, ComputeAtMode::BestEffort);
     }
   }
 }
@@ -1436,7 +1327,7 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
 
     auto tv_id = mapped_ids.at(tv);
 
-    for (auto consumer_tv : consumerTvsOf(tv)) {
+    for (auto consumer_tv : ir_utils::consumerTvsOf(tv)) {
       if (visited.find(consumer_tv) != visited.end()) {
         continue;
       }
@@ -1456,7 +1347,7 @@ FindAllMappedDims::FindAllMappedDims(TensorView* from, IterDomain* id)
       }
     }
 
-    for (auto producer_tv : producerTvsOf(tv)) {
+    for (auto producer_tv : ir_utils::producerTvsOf(tv)) {
       if (visited.find(producer_tv) != visited.end()) {
         continue;
       }

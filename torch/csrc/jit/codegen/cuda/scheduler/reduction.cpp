@@ -578,7 +578,7 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
   FUSER_PERF_SCOPE("getReductionHeuristics");
 
   FusionGuard fg(fusion);
-  auto all_tvs = scheduler_utils::allTvs(fusion);
+  auto all_tvs = ir_utils::allTvs(fusion);
 
   auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
 

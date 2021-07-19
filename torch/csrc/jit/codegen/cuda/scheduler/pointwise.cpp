@@ -294,7 +294,7 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
     }
   }
 
-  auto all_tvs = scheduler_utils::allTvs(fusion);
+  auto all_tvs = ir_utils::allTvs(fusion);
 
   scheduler_utils::mergeNonReduction(reference_tv);
 
@@ -371,7 +371,7 @@ void schedulePointwise(Fusion* fusion, const PointwiseParams& params) {
     // Avoid duplicate additions, so track what we add
     std::unordered_set<TensorView*> added;
     for (auto cached_input : cached_inputs) {
-      auto consumer_tvs = scheduler_utils::consumerTvsOf(cached_input);
+      auto consumer_tvs = ir_utils::consumerTvsOf(cached_input);
       TORCH_INTERNAL_ASSERT(
           consumer_tvs.size(),
           "Input was not succesfully filtered out for scheduling but wasn't used.");
