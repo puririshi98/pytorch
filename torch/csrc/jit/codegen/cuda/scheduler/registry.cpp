@@ -41,7 +41,8 @@ class SchedulerTopologyChecker {
       }
     }
 
-    // All tensor views that are eventually consumed to produce a reduction
+    // All tensor views that are eventually consumed to produce a reduction,
+    // includes reduction tensor views.
     std::unordered_set<TensorView*> pre_reduction_tvs;
 
     {
@@ -228,13 +229,13 @@ class SchedulerTopologyChecker {
   }
 
   // Checks if any broadcasts are resolved after a reduction, this shouldn't be
-  // accepted in the single reduction scheduler
+  // accepted in the single reduction or multi-reduction scheduler
   static bool hasPostReductionBCast(Fusion* fusion) {
     auto all_vals = fusion->usedMathVals();
     for (auto tv : ir_utils::filterByType<TensorView>(all_vals)) {
       // Welford can have 2 outputs, so do this on all found reduction tensor
       // views
-      if (tv->hasReduction() && !fusion->hasInput(tv)) {
+      if (tv->hasReduction() && !tv->isFusionInput()) {
         auto tv_chains = tvChains(DependencyCheck::getAllUseChains(tv));
         // Propagate forward from reduction through all uses of the reduction
         for (auto tv_dep_chain : tv_chains) {
@@ -265,6 +266,58 @@ class SchedulerTopologyChecker {
       }
     }
     return false;
+  }
+
+  // Checks if there's any unsupported operations post reduction. If outer
+  // reduction we can fuse some pointwise ops if they don't require
+  // broadcasting. For inner reductions we cannot fuse any binary like
+  // operations. Included other operations we're not even fusing at the moment
+  // like transpose and shift.
+  static bool supportedPostReductionFusion(
+      Fusion* fusion,
+      std::vector<TensorView*> reduction_tvs) {
+    TORCH_INTERNAL_ASSERT(reduction_tvs.size());
+    bool fastest_dim_reduction = true;
+    auto red_root_dom = reduction_tvs[0]->getRootDomain();
+    for (size_t i = red_root_dom.size(); i > 0; i--) {
+      if (red_root_dom[i - 1]->isBroadcast() ||
+          red_root_dom[i - 1]->isTrivialReduction()) {
+        continue;
+      } else if (red_root_dom[i - 1]->isReduction()) {
+        fastest_dim_reduction = true;
+        break;
+      } else {
+        fastest_dim_reduction = false;
+        break;
+      }
+    }
+
+    // If reduction is on fastest dim, don't fuse any non Unary or Broadcast
+    // operations post reduction.
+    if (fastest_dim_reduction) {
+      auto reductions_and_inputs = fusion->inputs();
+      reductions_and_inputs.insert(
+          reductions_and_inputs.end(),
+          reduction_tvs.begin(),
+          reduction_tvs.end());
+      auto dependent_vals = DependencyCheck::getAllValsBetween(
+          {reductions_and_inputs.begin(), reductions_and_inputs.end()},
+          {fusion->outputs().begin(), fusion->outputs().end()});
+      for (auto tv : ir_utils::filterByType<TensorView>(
+               dependent_vals.begin(), dependent_vals.end())) {
+        if (tv->definition() == nullptr) {
+          continue;
+        }
+        if (tv->definition()->isA<BinaryOp>() ||
+            tv->definition()->isA<TransposeOp>() ||
+            tv->definition()->isA<TernaryOp>() ||
+            tv->definition()->isA<ShiftOp>()) {
+          return false;
+        }
+      }
+    }
+
+    return true;
   }
 };
 } // namespace
@@ -594,21 +647,12 @@ class SingleReductionScheduler : public SchedulerEntry {
       return false;
     }
 
-    auto red_tv = is_welford ? welford_ops[0]->out()->as<TensorView>()
-                             : red_ops[0]->out()->as<TensorView>();
+    auto reduction_tv = is_welford ? welford_ops[0]->out()->as<TensorView>()
+                                   : red_ops[0]->out()->as<TensorView>();
 
-    // Not allowing broadcasting reduction result to support
-    //  grid reduction. This is an overkill might want to consider
-    //  trying to get the heuristics and check only if grid reduction is
-    //  required.
-    //  TODO: We can actually allow broadcasts that doesn't get resolved
-    //        in the same fusion, temporarily use a simplified detection
-    //        where broadcast is allowed if it's at output and has no use
-    auto dependent_vals = DependencyCheck::getAllDependentVals({red_tv});
-    for (auto val : dependent_vals) {
-      if (val->definition()->isA<BroadcastOp>() && !val->uses().empty()) {
-        return false;
-      }
+    if (!SchedulerTopologyChecker::supportedPostReductionFusion(
+            fusion, {reduction_tv})) {
+      return false;
     }
 
     return true;
@@ -736,12 +780,10 @@ class NormalizationScheduler : public SchedulerEntry {
       if (SchedulerTopologyChecker::hasPostReductionBCast(fusion)) {
         return false;
       }
-      auto dependent_vals = DependencyCheck::getAllDependentVals(
-          {reduction_tvs.begin(), reduction_tvs.end()});
-      for (auto val : dependent_vals) {
-        if (val->definition()->isA<BroadcastOp>() && !val->uses().empty()) {
-          return false;
-        }
+
+      if (!SchedulerTopologyChecker::supportedPostReductionFusion(
+              fusion, reduction_tvs)) {
+        return false;
       }
     }
 
