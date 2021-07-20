@@ -568,7 +568,6 @@ TensorView* scheduleReductionTV(
             reference_tv->axis(iter_axis)->parallelize(ParallelType::BIDx);
           }
         }
-        reference_tv = reference_tv;
       } else {
         TORCH_INTERNAL_ASSERT(
             has_iter_axis,
@@ -613,8 +612,6 @@ TensorView* scheduleReductionTV(
         } else {
           reference_tv->axis(0)->parallelize(ParallelType::BIDx);
         }
-
-        reference_tv = reference_tv;
       }
     } else {
       if (rparams.cross_grid) {
@@ -696,8 +693,6 @@ TensorView* scheduleReductionTV(
           }
         }
 
-        reference_tv = reference_tv;
-
       } else {
         TORCH_INTERNAL_ASSERT(
             rparams.reduction_unroll, "Iter unroll not implemented yet.");
@@ -776,8 +771,6 @@ TensorView* scheduleReductionTV(
             reference_tv->axis(iter_axis)->parallelize(ParallelType::BIDx);
           }
         }
-
-        reference_tv = reference_tv;
       }
     }
   } else {
@@ -827,9 +820,6 @@ TensorView* scheduleReductionTV(
         reference_tv->axis(2)->parallelize(ParallelType::BIDy);
         reference_tv->axis(1)->parallelize(ParallelType::TIDx);
         reference_tv->axis(0)->parallelize(ParallelType::BIDx);
-
-        reference_tv = reference_tv;
-
       } else {
         if (rparams.reduction_unroll || rparams.loop_unroll == 1) {
           // Outer Dim, cross block, unroll reduction dimension
@@ -871,9 +861,6 @@ TensorView* scheduleReductionTV(
           reference_tv->axis(2)->parallelize(ParallelType::TIDy);
           reference_tv->axis(1)->parallelize(ParallelType::TIDx);
           reference_tv->axis(0)->parallelize(ParallelType::BIDx);
-
-          reference_tv = reference_tv;
-
         } else {
           // Outer Dim, cross block, unroll iter dimension
 
@@ -933,8 +920,6 @@ TensorView* scheduleReductionTV(
           }
           reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
           reference_tv->axis(0)->parallelize(ParallelType::BIDx);
-
-          reference_tv = reference_tv;
         }
       }
     } else {
@@ -967,11 +952,15 @@ TensorView* scheduleReductionTV(
         //  0       1           2         3
         //
         // Reduction Dimensions
-        // r-Leftover]
+        // rf-Leftover, r-{1}]
         // 4(-1)
-
+        // Want to fake an rfactor to make scheduling more straight forward like
+        // other cases of unrolling iter dimension.
+        //
         // The unroll/unswitch dimension needs to be within the rF-Leftover
         // dimension
+
+        reduction_tv->split(1, 1);
 
         if (rparams.vectorize) {
           reduction_tv->split(0, rparams.loop_unroll);
@@ -985,10 +974,10 @@ TensorView* scheduleReductionTV(
 
         reduction_tv->split(0, 1);
 
-        // [x-BIDx, x-Unswitch, x-Unroll, x-TIDx, r-Leftover]
-        //   0(-5)     1(-4)      2(-3)    3(-2)     4(-1)
-        // [x-BIDx, x-Unswitch, x-TIDx, x-Vectorize, r-Leftover]
-        //   0(-5)     1(-4)      2(-3)    3(-2)       4(-1)
+        // [x-BIDx, x-Unswitch, x-Unroll, x-TIDx, rf-Leftover, r-1]
+        //   0         1          2        3            4       5
+        // [x-BIDx, x-Unswitch, x-TIDx, x-Vectorize, rf-Leftover, r-1]
+        //   0         1          2        3              4        5
 
         if (rparams.vectorize) {
           reduction_tv->reorder({{1, 3}, {2, 1}, {3, 4}, {4, 2}});
@@ -996,16 +985,18 @@ TensorView* scheduleReductionTV(
           reduction_tv->reorder({{1, 3}, {2, 4}, {3, 1}, {4, 2}});
         }
 
-        // [x-BIDx, x-TIDx, r-Leftover, x-Unswitch, x-Unroll]
-        //   0(-5)   1(-4)     2(-3)       3(-2)      4(-1)
-        reduction_tv->axis(0)->parallelize(ParallelType::BIDx);
-        reduction_tv->axis(1)->parallelize(ParallelType::TIDx);
-        if (rparams.vectorize) {
-          reduction_tv->axis(4)->parallelize(ParallelType::Vectorize);
-        }
-        reduction_tv->axis(3)->parallelize(ParallelType::Unswitch);
+        // [x-BIDx, x-TIDx, rf-Leftover, x-Unswitch, x-Unroll, r-1]
+        //   0       1            2           3          4      5
 
-        reference_tv = reduction_tv;
+        reference_tv = ir_utils::rfactorHelper(
+            reduction_tv, {2}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+
+        reference_tv->axis(0)->parallelize(ParallelType::BIDx);
+        reference_tv->axis(1)->parallelize(ParallelType::TIDx);
+        reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
+        if (rparams.vectorize) {
+          reference_tv->axis(4)->parallelize(ParallelType::Vectorize);
+        }
       }
     }
   }

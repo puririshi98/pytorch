@@ -383,7 +383,7 @@ ReductionParams OuterReductionHeuristic(
   if (ceilDiv(num_outputs_for_reduction, warp_size) <
       device_multiprocessor_count) {
     // If we can't hit a full wave, leave bdimx as warp_size, and prioritize
-    // bdimy
+    // bdimy. TODO: Re-evaluate, should it be bdimx = warp_size?
     bdimx = std::min(num_outputs_for_reduction, warp_size);
   } else {
     bdimx = std::min(
@@ -494,6 +494,12 @@ ReductionParams OuterReductionHeuristic(
     }
   }
 
+  // Cannot unroll with cross grid reductions
+  if (gdimy > 1 || unroll_reduction) {
+    unroll_reduction = true;
+    unroll_factor = 1;
+  }
+
   bool vectorize = false;
 
   if (vectorize_factor > 1 && unroll_factor > 1 && !unroll_reduction) {
@@ -511,14 +517,6 @@ ReductionParams OuterReductionHeuristic(
   rparams.loop_unroll = unroll_factor;
   rparams.vectorize = vectorize;
   rparams.reduction_unroll = unroll_reduction;
-
-  // WAR as it seems nvcc is doing some strange unrolling behavior in
-  // this scenario for fp16 small reduction dim large iter dim. Needs more
-  // investigation.
-  if (!rparams.cross_block && !rparams.cross_grid) {
-    rparams.loop_unroll = 1;
-    rparams.reduction_unroll = true;
-  }
 
   const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
   if (debug_env && atoi(debug_env)) {
