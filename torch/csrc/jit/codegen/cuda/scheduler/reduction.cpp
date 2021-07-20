@@ -22,7 +22,7 @@ namespace {
 ReductionParams innerReductionHeuristic(
     const int64_t num_elems_in_reduction,
     const int64_t num_outputs_for_reduction,
-    const int64_t n_input_tensors,
+    const int64_t n_tensor_inputs,
     const int64_t max_input_dtype_size,
     size_t vectorize_factor) {
   // Set some targets for parallelization
@@ -39,10 +39,10 @@ ReductionParams innerReductionHeuristic(
 
   auto const max_unroll = ceilDiv(
       // Available unrolling based on size of data type
-      (int64_t)16 / max_input_dtype_size,
+      (int64_t)16 / (int64_t)max_input_dtype_size,
       // Reduce unrolling if we have many inputs, start reduction at 2 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_input_tensors) >> 1),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
           (int64_t)1));
 
   // Conservative value, could be set to larger based on arch if necessary.
@@ -53,13 +53,13 @@ ReductionParams innerReductionHeuristic(
   // Check how many elements it would take per thread to start thrashing l1
   // set that to minimum number we want to reduce per thread.
   int64_t min_red_elems_per_thread = std::max(
-      l1_cache / (n_input_tensors * max_input_dtype_size * active_threads),
+      l1_cache / (n_tensor_inputs * max_input_dtype_size * active_threads),
       (int64_t)1);
 
   // if data fits in l2 and we need more parallelization in the reduction dim,
   // we can use a smaller warp size. While thread local data fits in l1, and
   // reduction dim is really small, we can use <32 threads per warp.
-  const bool fits_in_l2 = n_elems * max_input_dtype_size * n_input_tensors <
+  const bool fits_in_l2 = n_elems * max_input_dtype_size * n_tensor_inputs <
       at::cuda::getCurrentDeviceProperties()->l2CacheSize;
 
   // If it fits in l2, we just want to make sure each thread uses 32Bytes.
@@ -119,7 +119,6 @@ ReductionParams innerReductionHeuristic(
   // (1) x dim in multiple outputs
   // (2) y dim in multiple reductions
 
-  // TODO: Flip block y and x
   // Blocks for reductions
   int64_t grdim = 1;
   // Blocks for outputs
@@ -296,7 +295,7 @@ ReductionParams innerReductionHeuristic(
 ReductionParams OuterReductionHeuristic(
     const int64_t num_elems_in_reduction,
     const int64_t num_outputs_for_reduction,
-    const int64_t n_input_tensors,
+    const int64_t n_tensor_inputs,
     const int64_t max_input_dtype_size,
     size_t vectorize_factor) {
   // Set some targets for parallelization
@@ -306,7 +305,7 @@ ReductionParams OuterReductionHeuristic(
       at::cuda::getCurrentDeviceProperties()->l2CacheSize;
 
   const int64_t warp_size =
-      n_elems * max_input_dtype_size * n_input_tensors < l2_cache_size
+      n_elems * max_input_dtype_size * n_tensor_inputs < l2_cache_size
       ? (int64_t)32 / max_input_dtype_size
       : 32;
 
@@ -327,7 +326,7 @@ ReductionParams OuterReductionHeuristic(
       (int64_t)16 / (int64_t)max_input_dtype_size,
       // Reduce unrolling if we have many inputs, start reduction at 2 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_input_tensors) >> 1),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
           (int64_t)1));
 
   // If we have one warp per block, how many blocks would that be?
@@ -495,7 +494,7 @@ ReductionParams OuterReductionHeuristic(
   }
 
   // Cannot unroll with cross grid reductions
-  if (gdimy > 1 || unroll_reduction) {
+  if (gdimy > 1 && !unroll_reduction) {
     unroll_reduction = true;
     unroll_factor = 1;
   }
@@ -518,11 +517,6 @@ ReductionParams OuterReductionHeuristic(
   rparams.vectorize = vectorize;
   rparams.reduction_unroll = unroll_reduction;
 
-  const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
-  if (debug_env && atoi(debug_env)) {
-    std::cerr << rparams.toString() << std::endl;
-  }
-
   rparams.lparams = LaunchParams(
       LaunchParams::UNINITIALIZED_VAL,
       gdimy,
@@ -531,6 +525,10 @@ ReductionParams OuterReductionHeuristic(
       bdimy,
       LaunchParams::UNINITIALIZED_VAL);
 
+  const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
+  if (debug_env && atoi(debug_env)) {
+    std::cerr << rparams.toString() << std::endl;
+  }
   return rparams;
 }
 
@@ -540,21 +538,21 @@ ReductionParams reductionHeuristic(
     int64_t num_elems_in_reduction,
     int64_t num_outputs_for_reduction,
     bool fastest_dim_reduction,
-    size_t n_input_tensors,
+    size_t n_tensor_inputs,
     size_t max_input_dtype_size,
     size_t vectorize_factor) {
   if (fastest_dim_reduction) {
     return innerReductionHeuristic(
         num_elems_in_reduction,
         num_outputs_for_reduction,
-        n_input_tensors,
+        n_tensor_inputs,
         max_input_dtype_size,
         vectorize_factor);
   } else {
     return OuterReductionHeuristic(
         num_elems_in_reduction,
         num_outputs_for_reduction,
-        n_input_tensors,
+        n_tensor_inputs,
         max_input_dtype_size,
         vectorize_factor);
   }
@@ -631,17 +629,17 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
   }
 
   size_t max_dtype_size = 1;
-  size_t n_input_tensors = 0;
+  size_t n_tensor_inputs = 0;
   for (auto inp : fusion->inputs()) {
     if (inp->isA<TensorView>()) {
       max_dtype_size =
           std::max(max_dtype_size, dataTypeSize(inp->getDataType().value()));
-      n_input_tensors++;
+      n_tensor_inputs++;
     }
   }
 
   TORCH_INTERNAL_ASSERT(
-      n_input_tensors > 0,
+      n_tensor_inputs > 0,
       "Tried to schedule a fusion with no tensor inputs, currently not supported.");
 
   auto vectorizable_inputs_outputs =
@@ -663,7 +661,7 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
       red_elements,
       num_outputs_for_reduction,
       fastest_dim_reduction,
-      n_input_tensors,
+      n_tensor_inputs,
       max_dtype_size,
       vectorize_factor);
 }

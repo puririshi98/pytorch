@@ -32,6 +32,7 @@ class ReductionParams {
   // Number of batches for each block
   int64_t batches_per_block = 1;
   // Number of warps per block
+  // TODO: Remove or repurpose
   int64_t num_warps = 1;
   // Store input in shared memory or registers to reduce global memory reads
   bool persistent_kernel = false;
@@ -66,7 +67,6 @@ class ReductionParams {
        << "Reduction Characteristics:\n"
        << (multiple_reds_per_blk ? "Multiple Reds Per Block\n" : "")
        << (cross_block ? "Cross block reduction\n" : "")
-       << (cross_grid ? "Cross grid reduction\n" : "")
        << (cross_grid ? "Cross grid reduction\n" : "");
     if (persistent_kernel) {
       ss << "Persistent Kernel\n"
