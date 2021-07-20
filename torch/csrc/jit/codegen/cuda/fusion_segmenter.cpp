@@ -1594,10 +1594,11 @@ void deDuplicateScalarExprs(std::vector<Expr*>& exprs) {
 
 c10::optional<std::unique_ptr<SchedulerEntry>> SegmentedGroup::
     getMaybeSchedulerEntry(SchedulerRuntimeInfo& runtime_info) {
+  FUSER_PERF_SCOPE("SegmentedGroup::getMaybeSchedulerEntry");
   auto fusion = segmented_fusion_->completeFusion();
   auto data_cache = segmented_fusion_->getCachedHeuristicDataFor(this);
   FusionSegmentGuard fsg(fusion, getAllInputs(this), getAllOutputs(this));
-  if (!SchedulerEntry::canSchedule(heuristic(), fusion, runtime_info)) {
+  if (!SchedulerEntry::canSchedule(heuristic(), fusion, runtime_info, true)) {
     return c10::nullopt;
   }
   return SchedulerEntry::makeEntry(

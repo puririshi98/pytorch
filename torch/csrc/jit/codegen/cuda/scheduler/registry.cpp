@@ -630,7 +630,14 @@ class SingleReductionScheduler : public SchedulerEntry {
   }
 
   //! Check if the reduction heuristics apply in given fusion
-  static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
+  static bool canSchedule(
+      Fusion* fusion,
+      SchedulerRuntimeInfo& runtime_info,
+      bool input_dependent_check_only = false) {
+    if (input_dependent_check_only) {
+      return true;
+    }
+
     auto red_ops = findReductionOps(fusion);
     auto welford_ops = findReductionOps<WelfordOp>(fusion);
     if (red_ops.size() + welford_ops.size() != 1) {
@@ -680,7 +687,13 @@ class PointWiseScheduler : public SchedulerEntry {
     computeHeuristics(fusion, runtime_info, data_cache);
   }
 
-  static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
+  static bool canSchedule(
+      Fusion* fusion,
+      SchedulerRuntimeInfo& runtime_info,
+      bool input_dependent_check_only = false) {
+    if (input_dependent_check_only) {
+      return true;
+    }
     auto red_ops = findReductionOps(fusion);
     auto welford_ops = findReductionOps<WelfordOp>(fusion);
     return red_ops.empty() && welford_ops.empty();
@@ -716,7 +729,12 @@ class NormalizationScheduler : public SchedulerEntry {
     scheduleNormalization(fusion, rparams_);
   }
 
-  static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
+  static bool canSchedule(
+      Fusion* fusion,
+      SchedulerRuntimeInfo& runtime_info,
+      bool input_dependent_check_only = false) {
+    FUSER_PERF_SCOPE("NormalizationScheduler::canSchedule");
+
     std::vector<TensorView*> reduction_tvs;
     for (auto tv : ir_utils::allTvs(fusion)) {
       if (tv->hasReduction() && !fusion->hasInput(tv)) {
@@ -724,51 +742,53 @@ class NormalizationScheduler : public SchedulerEntry {
       }
     }
 
-    if (reduction_tvs.size() == 0) {
-      // Use single reduction or pointwise logic
-      return false;
-    }
+    if (!input_dependent_check_only) {
+      if (reduction_tvs.size() == 0) {
+        // Use single reduction or pointwise logic
+        return false;
+      }
 
-    if (SchedulerTopologyChecker::hasNonNormalizePostReductionBCast(fusion)) {
-      return false;
-    }
+      if (SchedulerTopologyChecker::hasNonNormalizePostReductionBCast(fusion)) {
+        return false;
+      }
 
-    // Before examining the reduction axes want to quickly
-    //   check the reductions have the same axis width
-    //   to avoid building root domain map in easier cases
-    bool valid_axis_count = false;
-    size_t axis_count = 0;
-    auto reduction_root_size = [](TensorView* red_tv) {
-      size_t count = 0;
-      for (auto id : red_tv->getRootDomain()) {
-        if (!id->isBroadcast()) {
-          count++;
+      // Before examining the reduction axes want to quickly
+      //   check the reductions have the same axis width
+      //   to avoid building root domain map in easier cases
+      bool valid_axis_count = false;
+      size_t axis_count = 0;
+      auto reduction_root_size = [](TensorView* red_tv) {
+        size_t count = 0;
+        for (auto id : red_tv->getRootDomain()) {
+          if (!id->isBroadcast()) {
+            count++;
+          }
+        }
+        return count;
+      };
+
+      for (auto red : reduction_tvs) {
+        if (!valid_axis_count) {
+          valid_axis_count = true;
+          axis_count = reduction_root_size(red);
+        } else {
+          if (reduction_root_size(red) != axis_count) {
+            return false;
+          }
         }
       }
-      return count;
-    };
 
-    for (auto red : reduction_tvs) {
-      if (!valid_axis_count) {
-        valid_axis_count = true;
-        axis_count = reduction_root_size(red);
-      } else {
-        if (reduction_root_size(red) != axis_count) {
+      // Use root domain map to check the reduction ops have the same axes
+      FusionGuard fg(fusion);
+      ComputeAtRootDomainMap root_map;
+      root_map.build(true);
+
+      // red_ops.size()>1 checked before
+      for (size_t it = 1; it < reduction_tvs.size(); it++) {
+        if (!checkEquivalence(
+                reduction_tvs[it - 1], reduction_tvs[it], root_map)) {
           return false;
         }
-      }
-    }
-
-    // Use root domain map to check the reduction ops have the same axes
-    FusionGuard fg(fusion);
-    ComputeAtRootDomainMap root_map;
-    root_map.build(true);
-
-    // red_ops.size()>1 checked before
-    for (size_t it = 1; it < reduction_tvs.size(); it++) {
-      if (!checkEquivalence(
-              reduction_tvs[it - 1], reduction_tvs[it], root_map)) {
-        return false;
       }
     }
 
@@ -859,14 +879,18 @@ const std::vector<ScheduleHeuristic>& all_heuristics() {
 bool SchedulerEntry::canSchedule(
     ScheduleHeuristic sh,
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info) {
+    SchedulerRuntimeInfo& runtime_info,
+    bool input_dependent_check_only) {
   switch (sh) {
     case ScheduleHeuristic::PointWise:
-      return PointWiseScheduler::canSchedule(fusion, runtime_info);
+      return PointWiseScheduler::canSchedule(
+          fusion, runtime_info, input_dependent_check_only);
     case ScheduleHeuristic::Reduction:
-      return SingleReductionScheduler::canSchedule(fusion, runtime_info);
+      return SingleReductionScheduler::canSchedule(
+          fusion, runtime_info, input_dependent_check_only);
     case ScheduleHeuristic::Normalization:
-      return NormalizationScheduler::canSchedule(fusion, runtime_info);
+      return NormalizationScheduler::canSchedule(
+          fusion, runtime_info, input_dependent_check_only);
     default:
       TORCH_INTERNAL_ASSERT(false, "unreachable");
       return false;
