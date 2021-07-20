@@ -52,11 +52,6 @@ ReductionParams innerNormalizationHeuristic(
   // Could change per generation, but for l1 we want to consider active threads,
   // not resident
   constexpr int64_t active_threads = 1024;
-  // Check how many elements it would take per thread to start thrashing l1
-  // set that to minimum number we want to reduce per thread.
-  int64_t min_red_elems_per_thread = std::max(
-      l1_cache / (n_tensor_inputs * max_input_dtype_size * active_threads),
-      (int64_t)1);
 
   // if data fits in l2 and we need more parallelization in the reduction dim,
   // we can use a smaller warp size. While thread local data fits in l1, and
@@ -68,8 +63,17 @@ ReductionParams innerNormalizationHeuristic(
   const int64_t warp_size_based_on_l2 =
       fits_in_l2 ? (int64_t)32 / max_input_dtype_size : 32;
 
+  // Check how many elements it would take per thread to start thrashing l1
+  // set that to minimum number we want to reduce per thread.
   const int64_t warp_size_based_on_l1 = std::min(
-      ceilDiv(num_elems_in_reduction, min_red_elems_per_thread), (int64_t)32);
+      ceilDiv(
+          num_elems_in_reduction,
+          std::max(
+              l1_cache /
+                  (n_tensor_inputs * max_input_dtype_size * active_threads),
+              (int64_t)1)),
+      (int64_t)32);
+
 
   // Take the smaller
   const int64_t warp_size =
@@ -78,33 +82,53 @@ ReductionParams innerNormalizationHeuristic(
   // Initialization
   int64_t target_blocks = 1;
   int64_t target_unroll = 1;
-  int64_t max_threads_in_block = std::min(
-      warp_size, ceilDiv(num_elems_in_reduction, min_red_elems_per_thread));
+  int64_t target_iterations = 1;
+  // Set max we want to set target iterations too, use 256bytes
+  int64_t min_target_iterations =
+      std::max((int64_t)32 / (int64_t)max_input_dtype_size, (int64_t)1);
+
+  int64_t max_threads_in_block = std::max(
+      warp_size, ceilDiv(num_elems_in_reduction, min_target_iterations));
 
   // If we have one warp per block, how many blocks would that be?
-  target_blocks = ceilDiv(n_elems, warp_size * min_red_elems_per_thread);
+  target_blocks = ceilDiv(n_elems, warp_size);
 
-  // If we have more than a wave, put parallelism into unrolling
+  // If we have more than a wave, put parallelism into unrolling and target
+  // iterations
   if (target_blocks > device_multiprocessor_count) {
-    target_unroll = std::min(
-        max_unroll, ceilDiv(target_blocks, device_multiprocessor_count));
-    target_blocks = ceilDiv(
-        n_elems, warp_size * std::max(target_unroll, min_red_elems_per_thread));
-  } else {
-    // Steal reduction elements from threads if it helps us get a wave of blocks
-    min_red_elems_per_thread = std::min(
-        min_red_elems_per_thread,
-        ceilDiv(
-            num_elems_in_reduction * num_outputs_for_reduction,
-            warp_size * device_multiprocessor_count));
+    auto available_unroll = std::max(
+        n_elems / (warp_size * device_multiprocessor_count), (int64_t)1);
+
+    bool flip = true;
+
+    while (available_unroll > 1 &&
+           (target_unroll < max_unroll ||
+            // Prefer unrolling
+            target_iterations < ceilDiv(min_target_iterations, max_unroll))) {
+      if (target_unroll * 2 <= max_unroll && flip) {
+        target_unroll *= 2;
+      }
+
+      if (target_iterations * 2 <= ceilDiv(min_target_iterations, max_unroll) && !flip) {
+        target_iterations *= 2;
+      }
+
+      available_unroll = std::max(
+          n_elems /
+              (warp_size * device_multiprocessor_count * target_unroll *
+               target_iterations),
+          (int64_t)1);
+
+      flip = !flip;
+    }
+
+    target_blocks = ceilDiv(n_elems, warp_size * target_unroll * target_iterations);
   }
 
   // Cap target blocks to 4 waves
   target_blocks = std::min(target_blocks, device_multiprocessor_count * 4);
 
-  if (target_blocks * target_unroll *
-          std::max(target_unroll, min_red_elems_per_thread) <
-      n_elems) {
+  if (target_blocks * target_unroll * target_iterations < n_elems) {
     // targetting 4 waves, so try to use a quarter of available threads
     max_threads_in_block = std::min(
         ceilDiv(n_elems, target_blocks * target_unroll),
@@ -145,6 +169,7 @@ ReductionParams innerNormalizationHeuristic(
 
   // Grab what we can out of reduction domain, but don't go over a warp size yet
   bdimx = std::min(num_elems_in_reduction, (int64_t)warp_size);
+  
   // Put everything else in bdimy for now
   bdimy = std::min(
       std::max(max_threads_in_block / bdimx, (int64_t)1),
@@ -167,9 +192,9 @@ ReductionParams innerNormalizationHeuristic(
   } else {
     // If we have reduction elements left, re-adjust the block dims
     bdimx = std::min(
-        ceilDiv(num_elems_in_reduction, min_red_elems_per_thread),
+        std::max(ceilDiv(num_elems_in_reduction, target_iterations * target_unroll), warp_size),
         max_threads_in_block);
-
+        
     // Don't exceed target.
     bdimy = std::min(
         std::max(max_threads_in_block / bdimx, (int64_t)1),
@@ -190,12 +215,12 @@ ReductionParams innerNormalizationHeuristic(
       // Clang-tidy
       //   remainder_in_reduction =
       //       ceilDiv(num_elems_in_reduction, bdimx *
-      //       min_red_elems_per_thread);
+      //       target_iterations);
     }
     // else {
     //   remainder_in_reduction = ceilDiv(
     //       num_elems_in_reduction,
-    //       bdimx * std::max(unroll_factor, min_red_elems_per_thread));
+    //       bdimx * std::max(unroll_factor, target_iterations));
     // }
   }
 
