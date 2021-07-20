@@ -40,9 +40,9 @@ ReductionParams innerReductionHeuristic(
   auto const max_unroll = ceilDiv(
       // Available unrolling based on size of data type
       (int64_t)16 / (int64_t)max_input_dtype_size,
-      // Reduce unrolling if we have many inputs, start reduction at 2 inputs
+      // Reduce unrolling if we have many inputs, start reduction at 4 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 2),
           (int64_t)1));
 
   // Conservative value, could be set to larger based on arch if necessary.
@@ -286,6 +286,13 @@ ReductionParams innerReductionHeuristic(
 
   const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
   if (debug_env && atoi(debug_env)) {
+    std::cerr << "\n===== Reduction Stats ========\n"
+              << "num_elems_in_reduction: " << num_elems_in_reduction << "\n"
+              << "num_outputs_for_reduction: " << num_outputs_for_reduction
+              << "\n"
+              << "n_tensor_inputs: " << n_tensor_inputs << "\n"
+              << "max_input_dtype_size: " << max_input_dtype_size << "\n"
+              << "vectorize_factor: " << vectorize_factor << std::endl;
     std::cerr << rparams.toString() << std::endl;
   }
 
@@ -324,9 +331,9 @@ ReductionParams OuterReductionHeuristic(
   auto const max_unroll = ceilDiv(
       // Available unrolling based on size of data type
       (int64_t)16 / (int64_t)max_input_dtype_size,
-      // Reduce unrolling if we have many inputs, start reduction at 2 inputs
+      // Reduce unrolling if we have many inputs, start reduction at 4 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 2),
           (int64_t)1));
 
   // If we have one warp per block, how many blocks would that be?
@@ -527,6 +534,13 @@ ReductionParams OuterReductionHeuristic(
 
   const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
   if (debug_env && atoi(debug_env)) {
+    std::cerr << "\n===== Reduction Stats ========\n"
+              << "num_elems_in_reduction: " << num_elems_in_reduction << "\n"
+              << "num_outputs_for_reduction: " << num_outputs_for_reduction
+              << "\n"
+              << "n_tensor_inputs: " << n_tensor_inputs << "\n"
+              << "max_input_dtype_size: " << max_input_dtype_size << "\n"
+              << "vectorize_factor: " << vectorize_factor << std::endl;
     std::cerr << rparams.toString() << std::endl;
   }
   return rparams;

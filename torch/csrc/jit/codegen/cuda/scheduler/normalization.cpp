@@ -42,9 +42,9 @@ ReductionParams innerNormalizationHeuristic(
   auto const max_unroll = ceilDiv(
       // Available unrolling based on size of data type
       (int64_t)16 / (int64_t)max_input_dtype_size,
-      // Reduce unrolling if we have many inputs, start reduction at 2 inputs
+      // Reduce unrolling if we have many inputs, start reduction at 4 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 2),
           (int64_t)1));
 
   // Conservative value, could be set to larger based on arch if necessary.
@@ -158,6 +158,7 @@ ReductionParams innerNormalizationHeuristic(
   if (remainder_in_reduction == 1 && !persistence_required) {
     // Small number of reduction elements,try unrolling output dimension
     unroll_factor = std::min(target_unroll, remainder_in_output);
+
     if (unroll_factor > 1) {
       unroll_reduction = false;
       remainder_in_output =
@@ -186,9 +187,10 @@ ReductionParams innerNormalizationHeuristic(
       }
       remainder_in_output =
           ceilDiv(num_outputs_for_reduction, bdimy * unroll_factor);
-    // Clang-tidy
-    //   remainder_in_reduction =
-    //       ceilDiv(num_elems_in_reduction, bdimx * min_red_elems_per_thread);
+      // Clang-tidy
+      //   remainder_in_reduction =
+      //       ceilDiv(num_elems_in_reduction, bdimx *
+      //       min_red_elems_per_thread);
     }
     // else {
     //   remainder_in_reduction = ceilDiv(
@@ -262,6 +264,16 @@ ReductionParams innerNormalizationHeuristic(
 
   const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
   if (debug_env && atoi(debug_env)) {
+    std::cerr << "\n===== Reduction Stats ========\n"
+              << "num_elems_in_reduction: " << num_elems_in_reduction << "\n"
+              << "num_outputs_for_reduction: " << num_outputs_for_reduction
+              << "\n"
+              << "n_tensor_inputs: " << n_tensor_inputs << "\n"
+              << "max_input_dtype_size: " << max_input_dtype_size << "\n"
+              << "persistence_required: " << persistence_required << "\n"
+              << "max_persistent_buffer_size: " << max_persistent_buffer_size
+              << "\n"
+              << "vectorize_factor: " << vectorize_factor << std::endl;
     std::cerr << rparams.toString() << std::endl;
   }
 
@@ -304,9 +316,9 @@ ReductionParams OuterNormalizationHeuristic(
   auto const max_unroll = ceilDiv(
       // Available unrolling based on size of data type
       (int64_t)16 / (int64_t)max_input_dtype_size,
-      // Reduce unrolling if we have many inputs, start reduction at 2 inputs
+      // Reduce unrolling if we have many inputs, start reduction at 4 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 1),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 2),
           (int64_t)1));
 
   // If we have one warp per block, how many blocks would that be?
@@ -368,7 +380,6 @@ ReductionParams OuterNormalizationHeuristic(
 
   if (ceilDiv(num_outputs_for_reduction, warp_size) <
       device_multiprocessor_count) {
-          
     // If we can't hit a full wave, leave bdimx as warp_size, and prioritize
     // bdimy. TODO: Re-evaluate, should it be bdimx = warp_size?
     bdimx = std::min(
@@ -410,7 +421,6 @@ ReductionParams OuterNormalizationHeuristic(
         : std::min(
               ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
               target_unroll);
-
     if (unroll_factor == 1 && remainder_in_reduction > 1) {
       // Try unrolling in reduction dimension
       unroll_factor = std::min(remainder_in_reduction, unroll_factor);
@@ -435,7 +445,7 @@ ReductionParams OuterNormalizationHeuristic(
       unroll_reduction = true;
     }
   }
-  
+
   if (unroll_factor == 1) {
     unroll_reduction = true;
   }
@@ -495,6 +505,16 @@ ReductionParams OuterNormalizationHeuristic(
 
   const char* debug_env = getenv("PYTORCH_NVFUSER_RED_SCHED_DEBUG");
   if (debug_env && atoi(debug_env)) {
+    std::cerr << "\n===== Reduction Stats ========\n"
+              << "num_elems_in_reduction: " << num_elems_in_reduction << "\n"
+              << "num_outputs_for_reduction: " << num_outputs_for_reduction
+              << "\n"
+              << "n_tensor_inputs: " << n_tensor_inputs << "\n"
+              << "max_input_dtype_size: " << max_input_dtype_size << "\n"
+              << "persistence_required: " << persistence_required << "\n"
+              << "max_persistent_buffer_size: " << max_persistent_buffer_size
+              << "\n"
+              << "vectorize_factor: " << vectorize_factor << std::endl;
     std::cerr << rparams.toString() << std::endl;
   }
 

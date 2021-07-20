@@ -932,12 +932,12 @@ TensorView* scheduleReductionTV(
         // Reduction Dimensions
         // rf-Leftover, rf-Unswitch, r-Unroll]
         //       2            3         4
-        if(rparams.persistent_kernel){
-            reduction_tv->split(1, rparams.batches_per_block, false);
-            reduction_tv->split(2, rparams.loop_unroll);
-            // Reduction Dimensions
-            // rf-Leftover, r-TIDy, rf-Unroll]
-            //       2         3         4
+        if (rparams.persistent_kernel) {
+          reduction_tv->split(1, rparams.batches_per_block, false);
+          reduction_tv->split(2, rparams.loop_unroll);
+          // Reduction Dimensions
+          // rf-Leftover, r-TIDy, rf-Unroll]
+          //       2         3         4
         } else {
           reduction_tv->split(1, rparams.loop_unroll);
           // Unswitch axis which gives us finer control on allocations with
@@ -947,7 +947,7 @@ TensorView* scheduleReductionTV(
 
         reduction_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
 
-        if(rparams.persistent_kernel){
+        if (rparams.persistent_kernel) {
           // [x-BIDx, x-TIDx, rf-Leftover, r-TIDy, rf-Unroll]
           //     0       1         2         3         4
           reduction_tv->reorder({{3, 2}, {2, 3}});
@@ -984,7 +984,7 @@ TensorView* scheduleReductionTV(
         //
         // The unroll/unswitch dimension needs to be within the rF-Leftover
         // dimension
-        if(rparams.persistent_kernel){
+        if (rparams.persistent_kernel) {
           reduction_tv->split(1, rparams.batches_per_block, false);
         } else {
           reduction_tv->split(1, 1);
@@ -1017,7 +1017,7 @@ TensorView* scheduleReductionTV(
         //   0       1            2           3          4      5
 
         reference_tv = ir_utils::rfactorHelper(reduction_tv, {2});
-        if(rparams.persistent_kernel){
+        if (rparams.persistent_kernel) {
           reference_tv->axis(5)->parallelize(ParallelType::TIDy);
         }
 
