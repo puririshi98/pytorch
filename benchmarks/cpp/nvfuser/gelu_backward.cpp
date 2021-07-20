@@ -11,6 +11,8 @@
 
 #include <cuda_runtime.h>
 
+#include "utils.h"
+
 using namespace torch::jit::fuser::cuda;
 
 static void setupFusion(Fusion* fusion) {
