@@ -198,8 +198,15 @@ ReductionParams innerNormalizationHeuristic(
   }
 
   godim = remainder_in_output;
-  // unroll_reduction = true;
-  // unroll_factor = 8;
+
+  bool vectorize = false;
+
+  if (vectorize_factor > 1 && unroll_factor > 1 && unroll_reduction) {
+    vectorize = true;
+    unroll_factor = std::min(
+        scheduler_utils::lastPow2(unroll_factor), (int64_t)vectorize_factor);
+  }
+
   // Persistence size from buffers
   int64_t batches_per_block = ceilDiv(
       num_elems_in_reduction,
@@ -218,18 +225,10 @@ ReductionParams innerNormalizationHeuristic(
 
   batches_per_block = std::min(round_up_8, round_up_pow2);
 
-  while (persistence_required && unroll_factor <= max_unroll &&
+  while (persistence_required && !vectorize && unroll_factor < max_unroll &&
          batches_per_block % 2 == 0) {
     batches_per_block /= 2;
     unroll_factor *= 2;
-  }
-
-  bool vectorize = false;
-
-  if (vectorize_factor > 1 && unroll_factor > 1 && unroll_reduction) {
-    vectorize = true;
-    unroll_factor = std::min(
-        scheduler_utils::lastPow2(unroll_factor), (int64_t)vectorize_factor);
   }
 
   ReductionParams rparams;

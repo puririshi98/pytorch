@@ -384,16 +384,16 @@ void IndexCompute::handle(Split* split) {
   const auto outer_ind = outer_it->second;
   const auto inner_ind = inner_it->second;
 
-  const bool outer_zero = outer_ind->isZeroInt();
-  const bool inner_zero = inner_ind->isZeroInt();
-
-  const bool outer_bcast = outer_id->isBroadcast();
-  const bool inner_bcast = inner_id->isBroadcast();
-
   const bool outer_vect =
       isParallelTypeVectorize(split->outer()->getParallelType());
   const bool inner_vect =
       isParallelTypeVectorize(split->inner()->getParallelType());
+
+  const bool outer_zero = outer_ind->isZeroInt() && !outer_vect;
+  const bool inner_zero = inner_ind->isZeroInt() && !inner_vect;
+
+  const bool outer_bcast = outer_id->isBroadcast();
+  const bool inner_bcast = inner_id->isBroadcast();
 
   // We want to mark as zero merged in if we're working with shared or local
   // memory, and the dimension we're working with is not part of the allocation,
@@ -418,7 +418,9 @@ void IndexCompute::handle(Split* split) {
     index_map_[in_id] = ir_builder.create<kir::Int>(0);
     extent_map_[in_id] = ir_builder.create<kir::Int>(0);
   } else if (zero_merged_in && outer_zero) {
-    index_map_[in_id] = inner_ind;
+    // Hack to propagate vectorization correctly. Otherwise extent of vectorized
+    // dim will get lost
+    index_map_[in_id] = ir_builder.addExpr(inner_ind, ir_builder.zeroVal());
     extent_map_[in_id] = getExtent(inner_id);
   } else if (zero_merged_in && inner_zero) {
     index_map_[in_id] = outer_ind;

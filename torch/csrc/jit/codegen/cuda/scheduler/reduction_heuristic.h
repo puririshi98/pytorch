@@ -67,7 +67,12 @@ class ReductionParams {
        << (multiple_reds_per_blk ? "Multiple Reds Per Block\n" : "")
        << (cross_block ? "Cross block reduction\n" : "")
        << (cross_grid ? "Cross grid reduction\n" : "")
-       << (persistent_kernel ? "Persistent Kernel\n" : "") << "Blocking:\n"
+       << (cross_grid ? "Cross grid reduction\n" : "");
+    if (persistent_kernel) {
+      ss << "Persistent Kernel\n"
+         << "Batches per block: " << batches_per_block << "\n";
+    }
+    ss << "Blocking:\n"
        << " GridY: " << lparams.gdimy() << " BlckY: " << lparams.bdimy()
        << " BlckX: " << lparams.bdimx() << "\n";
     if (loop_unroll > 1) {
