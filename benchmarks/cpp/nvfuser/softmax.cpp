@@ -86,6 +86,8 @@ static void Baseline_Softmax(
     auto output = at::_softmax(aten_input, kReductionAxis, false);
     benchmark_state.SetIterationTime(timer.elapsed() / 1000.0);
     cudaDeviceSynchronize();
+    clearL2Cache();
+    cudaDeviceSynchronize();
   }
 
   benchmark_state.SetBytesProcessed(
@@ -233,6 +235,8 @@ static void Baseline_Softmax_Dropout(
 
     // Record
     benchmark_state.SetIterationTime(timer.elapsed() / 1000.0);
+    cudaDeviceSynchronize();
+    clearL2Cache();
     cudaDeviceSynchronize();
   }
 

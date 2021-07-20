@@ -84,6 +84,7 @@ static void NvFuserScheduler_Reduction(
     auto cg_outputs = fusion_executor_cache->runFusionWithInputs({aten_input});
     benchmark_state.SetIterationTime(
         executor_instance->kernelTimeMs() / 1000.0);
+    clearL2Cache();
   }
   // Sync everything up before we're finished, don't want to run ahead on the
   // cpu while benchmarking.
@@ -118,24 +119,6 @@ NVFUSER_BENCHMARK_DEFINE(
     NvFuserScheduler_Reduction,
     DataType::Half,
     1);
-
-NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_Outer_Reduction)
-    ->RangeMultiplier(8)
-    ->Ranges({{1, 1024 * 1024}, {160, 320}})
-    ->Unit(benchmark::kMicrosecond)
-    ->UseManualTime();
-
-NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_Outer_Reduction)
-    ->RangeMultiplier(4)
-    ->Ranges({{32768, 128 * 1024 * 1024}, {2, 16}})
-    ->Unit(benchmark::kMicrosecond)
-    ->UseManualTime();
-
-NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_Outer_Reduction)
-    ->RangeMultiplier(4)
-    ->Ranges({{2, 16}, {32768, 128 * 1024 * 1024}})
-    ->Unit(benchmark::kMicrosecond)
-    ->UseManualTime();
 
 NVFUSER_BENCHMARK_RUN(NvFuserScheduler_fp32_Outer_Reduction)
     ->RangeMultiplier(8)
