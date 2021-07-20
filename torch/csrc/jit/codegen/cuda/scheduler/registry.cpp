@@ -295,13 +295,8 @@ class SchedulerTopologyChecker {
     // If reduction is on fastest dim, don't fuse any non Unary or Broadcast
     // operations post reduction.
     if (fastest_dim_reduction) {
-      auto reductions_and_inputs = fusion->inputs();
-      reductions_and_inputs.insert(
-          reductions_and_inputs.end(),
-          reduction_tvs.begin(),
-          reduction_tvs.end());
       auto dependent_vals = DependencyCheck::getAllValsBetween(
-          {reductions_and_inputs.begin(), reductions_and_inputs.end()},
+          {reduction_tvs.begin(), reduction_tvs.end()},
           {fusion->outputs().begin(), fusion->outputs().end()});
       for (auto tv : ir_utils::filterByType<TensorView>(
                dependent_vals.begin(), dependent_vals.end())) {

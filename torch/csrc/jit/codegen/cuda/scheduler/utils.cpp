@@ -1288,8 +1288,8 @@ void multiReductionInliner(
   } else {
     // Want to inline, especially backwards based on reduction_tv, otherwise
     // rfactor tv may not be inlined correctly
-
-    for (auto red_tv : reduction_tvs) {
+    auto ref_tvs = rfactor_tvs.size() ? rfactor_tvs : reduction_tvs;
+    for (auto red_tv : ref_tvs) {
       auto pos_it = std::find_if(
           red_tv->domain()->domain().begin(),
           red_tv->domain()->domain().end(),
