@@ -931,18 +931,43 @@ TensorView* scheduleReductionTV(
         //
         // Reduction Dimensions
         // rf-Leftover, rf-Unswitch, r-Unroll]
-        // 2(-3)        3(-2)        4(-1)
-        reduction_tv->split(1, rparams.loop_unroll);
-        // Unswitch axis which gives us finer control on allocations with
-        // unrolling
-        reduction_tv->split(1, 1);
+        //       2            3         4
+        if(rparams.persistent_kernel){
+            reduction_tv->split(1, rparams.batches_per_block, false);
+            reduction_tv->split(2, rparams.loop_unroll);
+            // Reduction Dimensions
+            // rf-Leftover, r-TIDy, rf-Unroll]
+            //       2         3         4
+        } else {
+          reduction_tv->split(1, rparams.loop_unroll);
+          // Unswitch axis which gives us finer control on allocations with
+          // unrolling
+          reduction_tv->split(1, 1);
+        }
+
         reduction_tv->split(0, NamedScalar::getParallelDim(ParallelType::TIDx));
 
-        reduction_tv->axis(0)->parallelize(ParallelType::BIDx);
-        reduction_tv->axis(1)->parallelize(ParallelType::TIDx);
-        reduction_tv->axis(-2)->parallelize(ParallelType::Unswitch);
-
-        reference_tv = reduction_tv;
+        if(rparams.persistent_kernel){
+          // [x-BIDx, x-TIDx, rf-Leftover, r-TIDy, rf-Unroll]
+          //     0       1         2         3         4
+          reduction_tv->reorder({{3, 2}, {2, 3}});
+          // [x-BIDx, x-TIDx, r-TIDy, rf-Leftover, rf-Unroll]
+          //     0       1       2           3         4
+          reference_tv = ir_utils::rfactorHelper(
+              reduction_tv,
+              {3, 4}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+          reference_tv->axis(0)->parallelize(ParallelType::BIDx);
+          reference_tv->axis(1)->parallelize(ParallelType::TIDx);
+          reference_tv->axis(2)->parallelize(ParallelType::TIDy);
+          reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
+        } else {
+          reference_tv = ir_utils::rfactorHelper(
+              reduction_tv,
+              {2, 3}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+          reference_tv->axis(0)->parallelize(ParallelType::BIDx);
+          reference_tv->axis(1)->parallelize(ParallelType::TIDx);
+          reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
+        }
       } else {
         // No parallelization on reduction, unroll iter axis
         // Output Dimensions
@@ -954,13 +979,16 @@ TensorView* scheduleReductionTV(
         // Reduction Dimensions
         // rf-Leftover, r-{1}]
         // 4(-1)
-        // Want to fake an rfactor to make scheduling more straight forward like
-        // other cases of unrolling iter dimension.
+        //
+        // Fake an rfactor to make scheduling more consistent.
         //
         // The unroll/unswitch dimension needs to be within the rF-Leftover
         // dimension
-
-        reduction_tv->split(1, 1);
+        if(rparams.persistent_kernel){
+          reduction_tv->split(1, rparams.batches_per_block, false);
+        } else {
+          reduction_tv->split(1, 1);
+        }
 
         if (rparams.vectorize) {
           reduction_tv->split(0, rparams.loop_unroll);
@@ -985,11 +1013,13 @@ TensorView* scheduleReductionTV(
           reduction_tv->reorder({{1, 3}, {2, 4}, {3, 1}, {4, 2}});
         }
 
-        // [x-BIDx, x-TIDx, rf-Leftover, x-Unswitch, x-Unroll, r-1]
+        // [x-BIDx, x-TIDx, rf-Leftover, x-Unswitch, x-Unroll, r-1(TIDy)]
         //   0       1            2           3          4      5
 
-        reference_tv = ir_utils::rfactorHelper(
-            reduction_tv, {2}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
+        reference_tv = ir_utils::rfactorHelper(reduction_tv, {2});
+        if(rparams.persistent_kernel){
+          reference_tv->axis(5)->parallelize(ParallelType::TIDy);
+        }
 
         reference_tv->axis(0)->parallelize(ParallelType::BIDx);
         reference_tv->axis(1)->parallelize(ParallelType::TIDx);

@@ -156,12 +156,13 @@ ReductionParams innerNormalizationHeuristic(
   // Adjust blocking and setup unrolling
   // Disable unrolling on iteration domain for now. TODO: Re-enable.
   if (remainder_in_reduction == 1 && !persistence_required) {
-    // Small number of reduction elements, don't try to unroll the reduction dim
-    unroll_reduction = false;
-    // Try unrolling output dimension
+    // Small number of reduction elements,try unrolling output dimension
     unroll_factor = std::min(target_unroll, remainder_in_output);
-    remainder_in_output =
-        ceilDiv(num_outputs_for_reduction, unroll_factor * bdimy);
+    if (unroll_factor > 1) {
+      unroll_reduction = false;
+      remainder_in_output =
+          ceilDiv(num_outputs_for_reduction, unroll_factor * bdimy);
+    }
   } else {
     // If we have reduction elements left, re-adjust the block dims
     bdimx = std::min(
@@ -176,24 +177,23 @@ ReductionParams innerNormalizationHeuristic(
 
     remainder_in_reduction = ceilDiv(num_elems_in_reduction, bdimx);
     unroll_factor = std::min(remainder_in_reduction, target_unroll);
-
     // Disable unrolling on iteration domain for now. TODO: Re-enable.
     if (unroll_factor == 1 && !persistence_required) {
       // If we can't unroll reduction dim, unroll output dim
-      unroll_reduction = false;
       unroll_factor = std::min(remainder_in_output, target_unroll);
+      if (unroll_factor > 1) {
+        unroll_reduction = false;
+      }
       remainder_in_output =
           ceilDiv(num_outputs_for_reduction, bdimy * unroll_factor);
-      // remainder_in_reduction =
-      //     ceilDiv(num_elems_in_reduction, bdimx * min_red_elems_per_thread);
-      // Leave this commented for clang, still think it's important to have
-      // though
+    // Clang-tidy
+    //   remainder_in_reduction =
+    //       ceilDiv(num_elems_in_reduction, bdimx * min_red_elems_per_thread);
     }
-    //  else {
-    // remainder_in_reduction = ceilDiv(
-    //     num_elems_in_reduction,
-    //     bdimx * std::max(unroll_factor, min_red_elems_per_thread));
-    // Leave this commented for clang, still think it's important to have though
+    // else {
+    //   remainder_in_reduction = ceilDiv(
+    //       num_elems_in_reduction,
+    //       bdimx * std::max(unroll_factor, min_red_elems_per_thread));
     // }
   }
 
@@ -358,7 +358,7 @@ ReductionParams OuterNormalizationHeuristic(
   int64_t bdimx = 1;
 
   // Should we unroll from reduction axis, or outs axis
-  bool unroll_reduction = true;
+  bool unroll_reduction = false;
 
   // Unroll amount
   int64_t unroll_factor = 1;
@@ -368,24 +368,11 @@ ReductionParams OuterNormalizationHeuristic(
 
   if (ceilDiv(num_outputs_for_reduction, warp_size) <
       device_multiprocessor_count) {
-    // If we can't hit a full wave, reduce the warp_size to increase
-    // the number of blocks.  The warp should be reduced at a minimum
-    // to the granularity that an SM would pull a unique portion of a
-    // cacheline from the memory system or else there is no
-    // benefit from spreading the work to a different block.
-    // This is dependent on the data size of elements.
-    const int64_t cache_sector_bytes = 32;
-    int64_t min_outputs_per_block =
-        std::max(cache_sector_bytes / max_input_dtype_size, (int64_t)1);
+          
+    // If we can't hit a full wave, leave bdimx as warp_size, and prioritize
+    // bdimy. TODO: Re-evaluate, should it be bdimx = warp_size?
     bdimx = std::min(
-        std::min(
-            std::max(
-                ceilDiv(
-                    num_outputs_for_reduction, device_multiprocessor_count) /
-                    min_outputs_per_block,
-                (int64_t)1),
-            (int64_t)1) *
-            min_outputs_per_block,
+        std::min(num_outputs_for_reduction, warp_size),
         max_multi_reduction_factor);
   } else {
     bdimx = std::min(
@@ -398,8 +385,8 @@ ReductionParams OuterNormalizationHeuristic(
       std::max(max_threads_in_block / bdimx, (int64_t)1),
       num_elems_in_reduction);
 
+  // Clang tidy
   // remainder_in_output = ceilDiv(num_outputs_for_reduction, bdimx);
-  // unused, but only commenting for clang-tidy
   remainder_in_reduction = ceilDiv(remainder_in_reduction, bdimy);
 
   if (num_outputs_for_reduction >=
@@ -409,6 +396,7 @@ ReductionParams OuterNormalizationHeuristic(
     bdimx = std::min(max_threads_in_block, max_multi_reduction_factor);
     remainder_in_output = ceilDiv(num_outputs_for_reduction, bdimx);
 
+    // TODO: Evaluate this!
     bdimy = 1;
     remainder_in_reduction = num_elems_in_reduction;
 
@@ -416,25 +404,22 @@ ReductionParams OuterNormalizationHeuristic(
     // Don't unroll if we don't have 2 full waves
     //
     // For persistent kernels disable unrolling of iteration
-    // TODO: Check if reduction schedulers actually benefit from this, only
-    // considered persistent kernels which have difficulty inlining intermediate
-    // values so register space can blow up.
-    // Disable unrolling on iteration domain for now.
+    // TODO: Re-enable
     unroll_factor = persistence_required
         ? 1
         : std::min(
               ceilDiv(remainder_in_output, device_multiprocessor_count * 2),
               target_unroll);
 
-    if (unroll_factor > 1) {
-      unroll_reduction = false;
-    }
-
     if (unroll_factor == 1 && remainder_in_reduction > 1) {
       // Try unrolling in reduction dimension
       unroll_factor = std::min(remainder_in_reduction, unroll_factor);
+      // Clang tidy
       // remainder_in_reduction = ceilDiv(remainder_in_reduction,
-      // unroll_factor); Unused, comment for clang tidy.
+      // unroll_factor);
+      if (unroll_factor > 1) {
+        unroll_reduction = true;
+      }
     }
     //  else {
     // remainder_in_output =
@@ -442,11 +427,17 @@ ReductionParams OuterNormalizationHeuristic(
     // unused, comment for clang tidy
     // }
   } else {
-    // Not many output elements, try unrolling reduction dimension
+    // Not many output elements, try unrolling reduction dimension, would
+    // typically go cross grid, but can't for multi-reduction and normalization
+    // kernels
     unroll_factor = std::min(max_unroll, remainder_in_reduction);
     if (unroll_factor > 1) {
       unroll_reduction = true;
     }
+  }
+  
+  if (unroll_factor == 1) {
+    unroll_reduction = true;
   }
 
   // Persistence size from buffers
@@ -481,7 +472,7 @@ ReductionParams OuterNormalizationHeuristic(
 
   ReductionParams rparams;
   rparams.fastest_dim = false;
-  rparams.cross_block = true;
+  rparams.cross_block = bdimy > 1;
   rparams.cross_grid = false;
   rparams.multiple_reds_per_blk =
       bdimx > 1 || (!unroll_reduction && unroll_factor);
