@@ -212,26 +212,7 @@ class TORCH_CUDA_CU_API HeuristicSummary {
   HeuristicSummary(
       Fusion* fusion,
       ScheduleHeuristic heuristic,
-      SchedulerRuntimeInfo& runtime_info)
-      : heuristic_(heuristic) {
-    recording_ = true;
-    switch (heuristic) {
-      case ScheduleHeuristic::PointWise:
-        getPointwiseHeuristics(fusion, runtime_info, this);
-        break;
-      case ScheduleHeuristic::Reduction:
-        getReductionHeuristics(fusion, runtime_info, this);
-        break;
-      case ScheduleHeuristic::Normalization:
-        getNormalizationHeuristics(fusion, runtime_info, this);
-        break;
-      default:
-        TORCH_INTERNAL_ASSERT(false, "unknown heuristic");
-    }
-    validate();
-    recording_ = false;
-  }
-
+      SchedulerRuntimeInfo& runtime_info);
   // Recording scheme:
   bool isRecording() {
     return recording_;
@@ -251,6 +232,8 @@ class TORCH_CUDA_CU_API HeuristicSummary {
         TORCH_INTERNAL_ASSERT(vectorizable_inputs_outputs_);
         TORCH_INTERNAL_ASSERT(reduction_tvs_);
         TORCH_INTERNAL_ASSERT(persistent_buffer_info_);
+        TORCH_INTERNAL_ASSERT(has_post_reduction_bcast_);
+        TORCH_INTERNAL_ASSERT(supported_post_reduction_fusion_);
         break;
     }
   }
@@ -258,8 +241,11 @@ class TORCH_CUDA_CU_API HeuristicSummary {
   // Accessors (un-protected for now)
   void setVectorizableInputsOutputs(const std::vector<TensorView*>& input) {
     TORCH_INTERNAL_ASSERT(recording_);
-    vectorizable_inputs_outputs_ =
-        std::make_unique<std::vector<TensorView*>>(input);
+
+    if (!vectorizable_inputs_outputs_) {
+      vectorizable_inputs_outputs_ =
+          std::make_unique<std::vector<TensorView*>>(input);
+    }
   }
 
   auto* getVectorizableInputsOutputs() {
@@ -268,7 +254,10 @@ class TORCH_CUDA_CU_API HeuristicSummary {
 
   void setReductionTVs(const std::vector<TensorView*>& input) {
     TORCH_INTERNAL_ASSERT(recording_);
-    reduction_tvs_ = std::make_unique<std::vector<TensorView*>>(input);
+
+    if (!reduction_tvs_) {
+      reduction_tvs_ = std::make_unique<std::vector<TensorView*>>(input);
+    }
   }
 
   auto* getReductionTVs() {
@@ -278,12 +267,41 @@ class TORCH_CUDA_CU_API HeuristicSummary {
   void setPersistentBufferInfo(
       const scheduler_utils::PersistentBufferInfo& input) {
     TORCH_INTERNAL_ASSERT(recording_);
-    persistent_buffer_info_ =
-        std::make_unique<scheduler_utils::PersistentBufferInfo>(input);
+
+    if (!persistent_buffer_info_) {
+      persistent_buffer_info_ =
+          std::make_unique<scheduler_utils::PersistentBufferInfo>(input);
+    }
   }
 
   auto* getPersistentBufferInfo() {
     return persistent_buffer_info_.get();
+  }
+
+  void setSupportedPostReductionFusion(
+      bool input) {
+    TORCH_INTERNAL_ASSERT(recording_);
+
+    if (!supported_post_reduction_fusion_) {
+      supported_post_reduction_fusion_ = std::make_unique<bool>(input);
+    }
+  }
+
+  auto* getSupportedPostReductionFusion() {
+    return supported_post_reduction_fusion_.get();
+  }
+
+  void setHasPostReductionBCast(
+      bool input) {
+    TORCH_INTERNAL_ASSERT(recording_);
+
+    if (!has_post_reduction_bcast_) {
+      has_post_reduction_bcast_ = std::make_unique<bool>(input);
+    }
+  }
+
+  auto* getHasPostReductionBCast() {
+    return has_post_reduction_bcast_.get();
   }
 
  private:
@@ -295,6 +313,8 @@ class TORCH_CUDA_CU_API HeuristicSummary {
   std::unique_ptr<std::vector<TensorView*>> reduction_tvs_;
   std::unique_ptr<scheduler_utils::PersistentBufferInfo>
       persistent_buffer_info_;
+  std::unique_ptr<bool> has_post_reduction_bcast_;
+  std::unique_ptr<bool> supported_post_reduction_fusion_;
 };
 
 // A temporary utility class to save some boilerplate code when

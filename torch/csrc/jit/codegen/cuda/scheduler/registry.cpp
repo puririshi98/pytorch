@@ -832,15 +832,48 @@ class NormalizationScheduler : public SchedulerEntry {
       return false;
     }
 
+    // TODO: really need to make inserting an entry into data_cache easier to do
+    HeuristicCacheAccessor<bool> has_post_reduction_bcast_data;
+
+    if (data_cache && !data_cache->isRecording()) {
+      has_post_reduction_bcast_data.writeTemporary(
+          data_cache->getHasPostReductionBCast());
+    } else {
+      has_post_reduction_bcast_data.writeNew(
+          SchedulerTopologyChecker::hasPostReductionBCast(fusion));
+      if (data_cache && data_cache->isRecording()) {
+        data_cache->setHasPostReductionBCast(
+            has_post_reduction_bcast_data.read());
+      }
+    }
+
+    HeuristicCacheAccessor<bool> supported_post_reduction_fusion_data;
+
+    if (data_cache && !data_cache->isRecording()) {
+      supported_post_reduction_fusion_data.writeTemporary(
+          data_cache->getSupportedPostReductionFusion());
+    } else {
+      supported_post_reduction_fusion_data.writeNew(
+          SchedulerTopologyChecker::supportedPostReductionFusion(
+              fusion, reduction_tvs));
+      if (data_cache && data_cache->isRecording()) {
+        data_cache->setSupportedPostReductionFusion(
+            supported_post_reduction_fusion_data.read());
+      }
+    }
+
+    auto has_post_reduction_bcast = has_post_reduction_bcast_data.read();
+    auto supported_post_reduction_fusion =
+        supported_post_reduction_fusion_data.read();
+
     // Multi reduction scheduler has the same limitations as single reduction
     // scheduler here
     if (persistent_buffer_size <= 1) {
-      if (SchedulerTopologyChecker::hasPostReductionBCast(fusion)) {
+      if (has_post_reduction_bcast) {
         return false;
       }
 
-      if (!SchedulerTopologyChecker::supportedPostReductionFusion(
-              fusion, reduction_tvs)) {
+      if (!supported_post_reduction_fusion) {
         return false;
       }
     }
@@ -988,6 +1021,32 @@ std::string toString(ScheduleHeuristic sh) {
       TORCH_INTERNAL_ASSERT(false, "undefined schedule");
   }
   return "";
+}
+
+HeuristicSummary::HeuristicSummary(
+    Fusion* fusion,
+    ScheduleHeuristic heuristic,
+    SchedulerRuntimeInfo& runtime_info)
+    : heuristic_(heuristic) {
+  recording_ = true;
+  switch (heuristic) {
+    case ScheduleHeuristic::PointWise:
+      getPointwiseHeuristics(fusion, runtime_info, this);
+      PointWiseScheduler::canSchedule(fusion, runtime_info, this);
+      break;
+    case ScheduleHeuristic::Reduction:
+      getReductionHeuristics(fusion, runtime_info, this);
+      SingleReductionScheduler::canSchedule(fusion, runtime_info, this);
+      break;
+    case ScheduleHeuristic::Normalization:
+      getNormalizationHeuristics(fusion, runtime_info, this);
+      NormalizationScheduler::canSchedule(fusion, runtime_info, this);
+      break;
+    default:
+      TORCH_INTERNAL_ASSERT(false, "unknown heuristic");
+  }
+  validate();
+  recording_ = false;
 }
 
 } // namespace cuda
