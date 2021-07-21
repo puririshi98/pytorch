@@ -623,9 +623,10 @@ class SingleReductionScheduler : public SchedulerEntry {
  public:
   explicit SingleReductionScheduler(
       Fusion* fusion,
-      SchedulerRuntimeInfo& runtime_info)
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr)
       : SchedulerEntry(ScheduleHeuristic::Reduction, true) {
-    computeHeuristics(fusion, runtime_info);
+    computeHeuristics(fusion, runtime_info, data_cache);
   }
 
   //! Check if the reduction heuristics apply in given fusion
@@ -659,8 +660,11 @@ class SingleReductionScheduler : public SchedulerEntry {
   }
 
  private:
-  void computeHeuristics(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
-    auto param = getReductionHeuristics(fusion, runtime_info);
+  void computeHeuristics(
+      Fusion* fusion,
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr) {
+    auto param = getReductionHeuristics(fusion, runtime_info, data_cache);
     TORCH_INTERNAL_ASSERT(param.has_value());
     rparams_ = param.value();
   }
@@ -670,9 +674,10 @@ class PointWiseScheduler : public SchedulerEntry {
  public:
   explicit PointWiseScheduler(
       Fusion* fusion,
-      SchedulerRuntimeInfo& runtime_info)
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr)
       : SchedulerEntry(ScheduleHeuristic::PointWise, false) {
-    computeHeuristics(fusion, runtime_info);
+    computeHeuristics(fusion, runtime_info, data_cache);
   }
 
   static bool canSchedule(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
@@ -686,8 +691,11 @@ class PointWiseScheduler : public SchedulerEntry {
     schedulePointwise(fusion, pparams_);
   }
 
-  void computeHeuristics(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
-    auto pparam = getPointwiseHeuristics(fusion, runtime_info);
+  void computeHeuristics(
+      Fusion* fusion,
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr) {
+    auto pparam = getPointwiseHeuristics(fusion, runtime_info, data_cache);
     TORCH_INTERNAL_ASSERT(pparam.has_value());
     pparams_ = pparam.value();
   }
@@ -697,9 +705,10 @@ class NormalizationScheduler : public SchedulerEntry {
  public:
   explicit NormalizationScheduler(
       Fusion* fusion,
-      SchedulerRuntimeInfo& runtime_info)
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr)
       : SchedulerEntry(ScheduleHeuristic::Normalization, true) {
-    computeHeuristics(fusion, runtime_info);
+    computeHeuristics(fusion, runtime_info, data_cache);
   }
 
   void schedule(Fusion* fusion) override {
@@ -763,8 +772,10 @@ class NormalizationScheduler : public SchedulerEntry {
       }
     }
 
-    auto persistent_buffer_size =
-        scheduler_utils::persistentBufferSize(fusion, runtime_info);
+    auto persistent_buffers = scheduler_utils::persistentBuffers(fusion);
+
+    auto persistent_buffer_size = scheduler_utils::persistentBufferSize(
+        fusion, runtime_info, persistent_buffers);
     if (persistent_buffer_size * 4 > scheduler_utils::register_file_size * 3) {
       return false;
     }
@@ -786,8 +797,11 @@ class NormalizationScheduler : public SchedulerEntry {
   }
 
  private:
-  void computeHeuristics(Fusion* fusion, SchedulerRuntimeInfo& runtime_info) {
-    auto rparams = getNormalizationHeuristics(fusion, runtime_info);
+  void computeHeuristics(
+      Fusion* fusion,
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr) {
+    auto rparams = getNormalizationHeuristics(fusion, runtime_info, data_cache);
     TORCH_INTERNAL_ASSERT(rparams.has_value());
     rparams_ = rparams.value();
   }
@@ -863,20 +877,21 @@ bool SchedulerEntry::canSchedule(
 std::unique_ptr<SchedulerEntry> SchedulerEntry::makeEntry(
     ScheduleHeuristic sh,
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info) {
+    SchedulerRuntimeInfo& runtime_info,
+    HeuristicSummary* data_cache) {
   std::unique_ptr<SchedulerEntry> scheduler_entry = nullptr;
   switch (sh) {
     case ScheduleHeuristic::PointWise:
-      scheduler_entry =
-          std::make_unique<PointWiseScheduler>(fusion, runtime_info);
+      scheduler_entry = std::make_unique<PointWiseScheduler>(
+          fusion, runtime_info, data_cache);
       break;
     case ScheduleHeuristic::Reduction:
-      scheduler_entry =
-          std::make_unique<SingleReductionScheduler>(fusion, runtime_info);
+      scheduler_entry = std::make_unique<SingleReductionScheduler>(
+          fusion, runtime_info, data_cache);
       break;
     case ScheduleHeuristic::Normalization:
-      scheduler_entry =
-          std::make_unique<NormalizationScheduler>(fusion, runtime_info);
+      scheduler_entry = std::make_unique<NormalizationScheduler>(
+          fusion, runtime_info, data_cache);
       break;
     default:
       TORCH_INTERNAL_ASSERT(false, "unreachable");

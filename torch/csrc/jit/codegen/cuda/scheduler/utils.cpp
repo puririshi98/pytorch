@@ -313,9 +313,8 @@ void computeAtBetween(
 
 int64_t persistentBufferSize(
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info) {
-  auto persistent_buffers = persistentBuffers(fusion);
-
+    SchedulerRuntimeInfo& runtime_info,
+    PersistentBufferInfo& persistent_buffers) {
   if (persistent_buffers.buffers.empty()) {
     return 0;
   }
@@ -373,6 +372,9 @@ int64_t persistentBufferSize(
         continue;
       }
 
+      // TODO: this is slightly more involving to cache,
+      //  but could definitely do if the saving one all vals in between
+      //  is large enough.
       if (scoped_persistence.find(val) != scoped_persistence.end()) {
         scoped_persistence.at(val) += persistent_buffer_size;
       } else {

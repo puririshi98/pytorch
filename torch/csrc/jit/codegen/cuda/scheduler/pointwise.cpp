@@ -38,14 +38,16 @@ constexpr int64_t lastPow2(int64_t n) {
 
 c10::optional<PointwiseParams> getPointwiseHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& runtime_inputs) {
+    const at::ArrayRef<c10::IValue>& runtime_inputs,
+    HeuristicSummary* data_cache) {
   SchedulerRuntimeInfo runtime_info(fusion, runtime_inputs, true);
-  return getPointwiseHeuristics(fusion, runtime_info);
+  return getPointwiseHeuristics(fusion, runtime_info, data_cache);
 }
 
 c10::optional<PointwiseParams> getPointwiseHeuristics(
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info) {
+    SchedulerRuntimeInfo& runtime_info,
+    HeuristicSummary* data_cache) {
   FUSER_PERF_SCOPE("getPointwiseHeuristics");
 
   FusionGuard fg(fusion);
@@ -128,8 +130,24 @@ c10::optional<PointwiseParams> getPointwiseHeuristics(
   // Vectorize as much as we can
   size_t vectorize_factor = max_unroll_factor;
 
-  auto vectorizable_inputs_outputs =
-      scheduler_utils::getVectorizableInputsOutputs(largest_out);
+  HeuristicCacheAccessor<std::vector<TensorView*>>
+      vectorizable_inputs_outputs_data;
+
+  // TODO: move all these boilerplate code into the accessor class
+  // (follow up)
+  if (data_cache && !data_cache->isRecording()) {
+    vectorizable_inputs_outputs_data.writeTemporary(
+        data_cache->getVectorizableInputsOutputs());
+  } else {
+    vectorizable_inputs_outputs_data.writeNew(
+        scheduler_utils::getVectorizableInputsOutputs(largest_out));
+    if (data_cache && data_cache->isRecording()) {
+      data_cache->setVectorizableInputsOutputs(
+          vectorizable_inputs_outputs_data.read());
+    }
+  }
+
+  auto& vectorizable_inputs_outputs = vectorizable_inputs_outputs_data.read();
 
   for (auto tv : vectorizable_inputs_outputs) {
     const auto tv_vectorize_factor = runtime_info.getVectorizableWidth(tv);

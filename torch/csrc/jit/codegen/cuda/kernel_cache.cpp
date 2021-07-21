@@ -388,7 +388,7 @@ FusionKernelRuntime::FusionKernelRuntime(
     // Take ownership and segment transformed fusion
     segmented_fusion_ =
         SegmentCandidateFinder::segment(std::move(fusion_copy), inputs);
-    heuristics_ = segmented_fusion_->makeHeuristics(inputs);
+    heuristics_ = segmented_fusion_->makeInitialHeuristics(inputs);
     executors_ =
         std::vector<FusionExecutor>(segmented_fusion_->groups().size());
     if (isDebugDumpEnabled(DebugDumpOption::FusionSegments)) {

@@ -573,23 +573,36 @@ ReductionParams reductionHeuristic(
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& runtime_inputs) {
+    const at::ArrayRef<c10::IValue>& runtime_inputs,
+    HeuristicSummary* data_cache) {
   FUSER_PERF_SCOPE("getReductionHeuristics");
 
   SchedulerRuntimeInfo runtime_info(fusion, runtime_inputs, true);
 
-  return getReductionHeuristics(fusion, runtime_info);
+  return getReductionHeuristics(fusion, runtime_info, data_cache);
 }
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getReductionHeuristics(
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info) {
+    SchedulerRuntimeInfo& runtime_info,
+    HeuristicSummary* data_cache) {
   FUSER_PERF_SCOPE("getReductionHeuristics");
 
   FusionGuard fg(fusion);
-  auto all_tvs = ir_utils::allTvs(fusion);
 
-  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
+  HeuristicCacheAccessor<std::vector<TensorView*>> reduction_tv_data;
+  // TODO: move all these boilerplate code into the accessor class
+  // (follow up)
+  if (data_cache && !data_cache->isRecording()) {
+    reduction_tv_data.writeTemporary(data_cache->getReductionTVs());
+  } else {
+    reduction_tv_data.writeNew(scheduler_utils::getReductionTvs(fusion));
+    if (data_cache && data_cache->isRecording()) {
+      data_cache->setReductionTVs(reduction_tv_data.read());
+    }
+  }
+
+  auto& reduction_tvs = reduction_tv_data.read();
 
   TORCH_INTERNAL_ASSERT(
       reduction_tvs.size() == 1, "Need reduction tensor views to schedule.");

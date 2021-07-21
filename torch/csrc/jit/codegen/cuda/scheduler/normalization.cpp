@@ -583,12 +583,25 @@ ReductionParams NormalizationHeuristic(
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info) {
+    SchedulerRuntimeInfo& runtime_info,
+    HeuristicSummary* data_cache) {
   FUSER_PERF_SCOPE("getNormalizationHeuristics");
 
   FusionGuard fg(fusion);
 
-  auto reduction_tvs = scheduler_utils::getReductionTvs(fusion);
+  HeuristicCacheAccessor<std::vector<TensorView*>> reduction_tv_data;
+  // TODO: move all these boilerplate code into the accessor class
+  // (follow up)
+  if (data_cache && !data_cache->isRecording()) {
+    reduction_tv_data.writeTemporary(data_cache->getReductionTVs());
+  } else {
+    reduction_tv_data.writeNew(scheduler_utils::getReductionTvs(fusion));
+    if (data_cache && data_cache->isRecording()) {
+      data_cache->setReductionTVs(reduction_tv_data.read());
+    }
+  }
+
+  auto& reduction_tvs = reduction_tv_data.read();
 
   TORCH_INTERNAL_ASSERT(
       !reduction_tvs.empty(), "Need reduction tensor views to schedule.");
@@ -622,17 +635,48 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
       n_tensor_inputs > 0,
       "Tried to schedule a fusion with no tensor inputs, currently not supported.");
 
-  auto persistent_buffers = scheduler_utils::persistentBuffers(fusion);
+  HeuristicCacheAccessor<scheduler_utils::PersistentBufferInfo>
+      persistent_buffer_data;
+
+  // TODO: move all these boilerplate code into the accessor class
+  // (follow up)
+  if (data_cache && !data_cache->isRecording()) {
+    persistent_buffer_data.writeTemporary(
+        data_cache->getPersistentBufferInfo());
+  } else {
+    persistent_buffer_data.writeNew(scheduler_utils::persistentBuffers(fusion));
+    if (data_cache && data_cache->isRecording()) {
+      data_cache->setPersistentBufferInfo(persistent_buffer_data.read());
+    }
+  }
+
+  auto& persistent_buffers = persistent_buffer_data.read();
   bool requires_persistence = !persistent_buffers.buffers.empty();
 
   auto properties =
       scheduler_utils::getProperties(fusion, runtime_info, first_red_tv);
 
-  auto max_persistent_size =
-      scheduler_utils::persistentBufferSize(fusion, runtime_info);
+  auto max_persistent_size = scheduler_utils::persistentBufferSize(
+      fusion, runtime_info, persistent_buffers);
 
-  auto vectorizable_inputs_outputs =
-      scheduler_utils::getVectorizableInputsOutputs(first_red_tv);
+  HeuristicCacheAccessor<std::vector<TensorView*>>
+      vectorizable_inputs_outputs_data;
+
+  // TODO: move all these boilerplate code into the accessor class
+  // (follow up)
+  if (data_cache && !data_cache->isRecording()) {
+    vectorizable_inputs_outputs_data.writeTemporary(
+        data_cache->getVectorizableInputsOutputs());
+  } else {
+    vectorizable_inputs_outputs_data.writeNew(
+        scheduler_utils::getVectorizableInputsOutputs(first_red_tv));
+    if (data_cache && data_cache->isRecording()) {
+      data_cache->setVectorizableInputsOutputs(
+          vectorizable_inputs_outputs_data.read());
+    }
+  }
+
+  auto& vectorizable_inputs_outputs = vectorizable_inputs_outputs_data.read();
 
   // Vectorize as much as we can
   size_t vectorize_factor = std::numeric_limits<size_t>::max();
@@ -659,10 +703,11 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& runtime_inputs) {
-  FUSER_PERF_SCOPE("getNormalizationHeuristics");
+    const at::ArrayRef<c10::IValue>& runtime_inputs,
+    HeuristicSummary* data_cache) {
+  FUSER_PERF_SCOPE("getNormalizationHeuristicsFromIValue");
   SchedulerRuntimeInfo runtime_info(fusion, runtime_inputs, true);
-  return getNormalizationHeuristics(fusion, runtime_info);
+  return getNormalizationHeuristics(fusion, runtime_info, data_cache);
 }
 
 namespace {

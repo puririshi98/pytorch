@@ -1,3 +1,5 @@
+#pragma once
+
 #include <torch/csrc/jit/codegen/cuda/fusion.h>
 #include <torch/csrc/jit/codegen/cuda/ir_all_nodes.h>
 #include <torch/csrc/jit/codegen/cuda/scheduler/reduction_heuristic.h>
@@ -131,7 +133,8 @@ void computeAtBetween(
 // hold persistent dimension.
 int64_t persistentBufferSize(
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info);
+    SchedulerRuntimeInfo& runtime_info,
+    PersistentBufferInfo& persistent_buffers);
 
 // Returns a set of all iteration domains (in roots of tensors) that map to a
 // trivial reduction

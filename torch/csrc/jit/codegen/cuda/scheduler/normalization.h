@@ -1,3 +1,5 @@
+#pragma once
+
 #include <ATen/core/ivalue.h>
 
 #include <torch/csrc/jit/codegen/cuda/fusion.h>
@@ -14,14 +16,17 @@ namespace fuser {
 namespace cuda {
 
 class SchedulerRuntimeInfo;
+class HeuristicSummary;
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
     Fusion* fusion,
-    const at::ArrayRef<c10::IValue>& runtime_inputs);
+    const at::ArrayRef<c10::IValue>& runtime_inputs,
+    HeuristicSummary* data_cache = nullptr);
 
 TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
     Fusion* fusion,
-    SchedulerRuntimeInfo& runtime_info);
+    SchedulerRuntimeInfo& runtime_info,
+    HeuristicSummary* data_cache = nullptr);
 
 TORCH_CUDA_CU_API void scheduleNormalization(
     Fusion* fusion,

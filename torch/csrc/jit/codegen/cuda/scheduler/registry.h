@@ -2,6 +2,8 @@
 
 #include <torch/csrc/jit/codegen/cuda/fusion.h>
 #include <torch/csrc/jit/codegen/cuda/scheduler/all_schedulers.h>
+#include <torch/csrc/jit/codegen/cuda/scheduler/utils.h>
+#include <torch/csrc/jit/codegen/cuda/utils.h>
 
 namespace torch {
 namespace jit {
@@ -102,6 +104,8 @@ class TORCH_CUDA_CU_API SchedulerRuntimeInfo {
   KernelIndexMode index_mode_ = KernelIndexMode::INT64;
 };
 
+class HeuristicSummary;
+
 //! Virtual base class for schedule heuristics
 //!   heuristic implementations derive from this
 //!   class and implement a schedule(Fusion*)
@@ -114,7 +118,8 @@ class TORCH_CUDA_CU_API SchedulerEntry {
   static std::unique_ptr<SchedulerEntry> makeEntry(
       ScheduleHeuristic sh,
       Fusion* fusion,
-      SchedulerRuntimeInfo& runtime_info);
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr);
 
   virtual ~SchedulerEntry() = default;
 
@@ -200,6 +205,124 @@ class TORCH_CUDA_CU_API SchedulerEntryHash {
 
 //! Debug print function for heuristics
 std::string toString(ScheduleHeuristic sh);
+
+class TORCH_CUDA_CU_API HeuristicSummary {
+ public:
+  HeuristicSummary(
+      Fusion* fusion,
+      ScheduleHeuristic heuristic,
+      SchedulerRuntimeInfo& runtime_info)
+      : heuristic_(heuristic) {
+    recording_ = true;
+    switch (heuristic) {
+      case ScheduleHeuristic::PointWise:
+        getPointwiseHeuristics(fusion, runtime_info, this);
+        break;
+      case ScheduleHeuristic::Reduction:
+        getReductionHeuristics(fusion, runtime_info, this);
+        break;
+      case ScheduleHeuristic::Normalization:
+        getNormalizationHeuristics(fusion, runtime_info, this);
+        break;
+      default:
+        TORCH_INTERNAL_ASSERT(false, "unknown heuristic");
+    }
+    validate();
+    recording_ = false;
+  }
+
+  // Recording scheme:
+  bool isRecording() {
+    return recording_;
+  }
+
+  // Validate post recording:
+  //  make sure we have collected all the needed fields
+  void validate() {
+    switch (heuristic_) {
+      case ScheduleHeuristic::PointWise:
+        TORCH_INTERNAL_ASSERT(vectorizable_inputs_outputs_);
+        break;
+      case ScheduleHeuristic::Reduction:
+        TORCH_INTERNAL_ASSERT(reduction_tvs_);
+        break;
+      case ScheduleHeuristic::Normalization:
+        TORCH_INTERNAL_ASSERT(vectorizable_inputs_outputs_);
+        TORCH_INTERNAL_ASSERT(reduction_tvs_);
+        TORCH_INTERNAL_ASSERT(persistent_buffer_info_);
+        break;
+    }
+  }
+
+  // Accessors (un-protected for now)
+  void setVectorizableInputsOutputs(const std::vector<TensorView*>& input) {
+    TORCH_INTERNAL_ASSERT(recording_);
+    vectorizable_inputs_outputs_ =
+        std::make_unique<std::vector<TensorView*>>(input);
+  }
+
+  auto* getVectorizableInputsOutputs() {
+    return vectorizable_inputs_outputs_.get();
+  }
+
+  void setReductionTVs(const std::vector<TensorView*>& input) {
+    TORCH_INTERNAL_ASSERT(recording_);
+    reduction_tvs_ = std::make_unique<std::vector<TensorView*>>(input);
+  }
+
+  auto* getReductionTVs() {
+    return reduction_tvs_.get();
+  }
+
+  void setPersistentBufferInfo(
+      const scheduler_utils::PersistentBufferInfo& input) {
+    TORCH_INTERNAL_ASSERT(recording_);
+    persistent_buffer_info_ =
+        std::make_unique<scheduler_utils::PersistentBufferInfo>(input);
+  }
+
+  auto* getPersistentBufferInfo() {
+    return persistent_buffer_info_.get();
+  }
+
+ private:
+  ScheduleHeuristic heuristic_;
+  bool recording_ = true;
+
+  // Actual data payload, could be folded into subclasses later.
+  std::unique_ptr<std::vector<TensorView*>> vectorizable_inputs_outputs_;
+  std::unique_ptr<std::vector<TensorView*>> reduction_tvs_;
+  std::unique_ptr<scheduler_utils::PersistentBufferInfo>
+      persistent_buffer_info_;
+};
+
+// A temporary utility class to save some boilerplate code when
+//  using HeuristicSummary. Can be significantly improved in a follow up.
+template <typename T>
+class HeuristicCacheAccessor {
+ public:
+  HeuristicCacheAccessor() = default;
+
+  T& read() {
+    if (temporary_data_) {
+      return *temporary_data_;
+    } else {
+      return *owned_data_;
+    }
+  }
+
+  void writeNew(T data) {
+    owned_data_ = std::make_unique<T>(std::move(data));
+  }
+
+  void writeTemporary(T* data) {
+    temporary_data_ = data;
+  }
+
+ private:
+  std::unique_ptr<T> owned_data_ = nullptr;
+  T* temporary_data_ = nullptr;
+};
 
 } // namespace cuda
 } // namespace fuser
