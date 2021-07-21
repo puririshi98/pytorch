@@ -749,12 +749,19 @@ class NormalizationScheduler : public SchedulerEntry {
       HeuristicSummary* data_cache = nullptr) {
     FUSER_PERF_SCOPE("NormalizationScheduler::canSchedule");
 
-    std::vector<TensorView*> reduction_tvs;
-    for (auto tv : ir_utils::allTvs(fusion)) {
-      if (tv->hasReduction() && !fusion->hasInput(tv)) {
-        reduction_tvs.push_back(tv);
+    HeuristicCacheAccessor<std::vector<TensorView*>> reduction_tv_data;
+    // TODO: move all these boilerplate code into the accessor class
+    // (follow up)
+    if (data_cache && !data_cache->isRecording()) {
+      reduction_tv_data.writeTemporary(data_cache->getReductionTVs());
+    } else {
+      reduction_tv_data.writeNew(scheduler_utils::getReductionTvs(fusion));
+      if (data_cache && data_cache->isRecording()) {
+        data_cache->setReductionTVs(reduction_tv_data.read());
       }
     }
+
+    auto& reduction_tvs = reduction_tv_data.read();
 
     if (!data_cache) {
       if (reduction_tvs.size() == 0) {

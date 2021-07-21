@@ -278,8 +278,7 @@ class TORCH_CUDA_CU_API HeuristicSummary {
     return persistent_buffer_info_.get();
   }
 
-  void setSupportedPostReductionFusion(
-      bool input) {
+  void setSupportedPostReductionFusion(bool input) {
     TORCH_INTERNAL_ASSERT(recording_);
 
     if (!supported_post_reduction_fusion_) {
@@ -291,8 +290,7 @@ class TORCH_CUDA_CU_API HeuristicSummary {
     return supported_post_reduction_fusion_.get();
   }
 
-  void setHasPostReductionBCast(
-      bool input) {
+  void setHasPostReductionBCast(bool input) {
     TORCH_INTERNAL_ASSERT(recording_);
 
     if (!has_post_reduction_bcast_) {
