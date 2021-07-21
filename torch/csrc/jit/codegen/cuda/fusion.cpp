@@ -220,7 +220,7 @@ void Fusion::removeVal(Val* val) {
   delete val;
 }
 
-void Fusion::addInput(Val* input) {
+void Fusion::addInput(Val* input, bool reset_fusion) {
   assertInFusion(input, "Cannot register input ");
 
   if (input->getValType().value() == ValType::TensorView) {
@@ -231,10 +231,12 @@ void Fusion::addInput(Val* input) {
   inputs_.push_back(input);
   input->setIsFusionInput(true);
 
-  resetTvUses();
+  if (reset_fusion) {
+    resetTvUses();
+  }
 }
 
-void Fusion::addOutput(Val* output) {
+void Fusion::addOutput(Val* output, bool reset_fusion) {
   assertInFusion(output, "Cannot register output ");
   if (output->getValType().value() == ValType::TensorView) {
     auto tv = output->as<TensorView>();
@@ -243,7 +245,9 @@ void Fusion::addOutput(Val* output) {
   outputs_.push_back(output);
   output->setIsFusionOutput(true);
 
-  resetTvUses();
+  if (reset_fusion) {
+    resetTvUses();
+  }
 }
 
 void Fusion::addOutput(WelfordResult& wr) {
@@ -255,22 +259,26 @@ void Fusion::addOutput(WelfordResult& wr) {
   addOutput(wr.avg);
 }
 
-void Fusion::removeInput(Val* input) {
+void Fusion::removeInput(Val* input, bool reset_fusion) {
   auto find_input = std::find(inputs_.begin(), inputs_.end(), input);
   if (find_input != inputs_.end()) {
     inputs_.erase(find_input);
   }
   input->setIsFusionInput(false);
-  resetTvUses();
+  if (reset_fusion) {
+    resetTvUses();
+  }
 }
 
-void Fusion::removeOutput(Val* output) {
+void Fusion::removeOutput(Val* output, bool reset_fusion) {
   auto find_output = std::find(outputs_.begin(), outputs_.end(), output);
   if (find_output != outputs_.end()) {
     outputs_.erase(find_output);
   }
   output->setIsFusionOutput(false);
-  resetTvUses();
+  if (reset_fusion) {
+    resetTvUses();
+  }
 }
 
 void Fusion::replaceOutput(Val* output, Val* replacement) {

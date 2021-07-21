@@ -101,11 +101,11 @@ class TORCH_CUDA_CU_API Fusion final {
 
   //! Register input as an input of the fusion
   // TODO: Rename to register
-  void addInput(Val* input);
+  void addInput(Val* input, bool reset_fusion = true);
 
   //! Register output as an output of the fusion
   // TODO: Rename to register
-  void addOutput(Val* output);
+  void addOutput(Val* output, bool reset_fusion = true);
 
   //! Register output as an output of the fusion
   // TODO: Rename to register
@@ -113,11 +113,11 @@ class TORCH_CUDA_CU_API Fusion final {
 
   //! Deregister input as an input of the fusion
   // TODO: Rename to register
-  void removeInput(Val* input);
+  void removeInput(Val* input, bool reset_fusion = true);
 
   //! Deregister output as an output of the fusion
   // TODO: Rename to register
-  void removeOutput(Val* output);
+  void removeOutput(Val* output, bool reset_fusion = true);
 
   //! Replace output with another value
   void replaceOutput(Val* output, Val* replacement);
