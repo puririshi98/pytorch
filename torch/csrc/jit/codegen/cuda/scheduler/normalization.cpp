@@ -61,7 +61,7 @@ ReductionParams innerNormalizationHeuristic(
 
   // If it fits in l2, we just want to make sure each thread uses 32Bytes.
   const int64_t warp_size_based_on_l2 =
-      fits_in_l2 ? (int64_t)32 / max_input_dtype_size : 32;
+      fits_in_l2 ? (int64_t)32 / max_input_dtype_size : 16;
 
   // Check how many elements it would take per thread to start thrashing l1
   // set that to minimum number we want to reduce per thread.
@@ -72,7 +72,7 @@ ReductionParams innerNormalizationHeuristic(
               l1_cache /
                   (n_tensor_inputs * max_input_dtype_size * active_threads),
               (int64_t)1)),
-      (int64_t)32);
+      (int64_t)16);
 
   // Take the smaller
   const int64_t warp_size =
@@ -324,10 +324,12 @@ ReductionParams OuterNormalizationHeuristic(
   const int64_t l2_cache_size =
       at::cuda::getCurrentDeviceProperties()->l2CacheSize;
 
+  // Selectively decreasing warp_size for outer reductions, they're a bit
+  // trickier to tune and reducing bdimx can help
   const int64_t warp_size =
       n_elems * max_input_dtype_size * n_tensor_inputs < l2_cache_size
       ? (int64_t)32 / max_input_dtype_size
-      : 32;
+      : 16;
 
   int64_t target_blocks = 1;
   int64_t target_unroll = 1;
@@ -435,7 +437,7 @@ ReductionParams OuterNormalizationHeuristic(
     bdimx = std::min(max_threads_in_block, max_multi_reduction_factor);
     remainder_in_output = ceilDiv(num_outputs_for_reduction, bdimx);
 
-    // TODO: Evaluate this!
+    // TODO: Evaluate this
     bdimy = 1;
     remainder_in_reduction = num_elems_in_reduction;
 
