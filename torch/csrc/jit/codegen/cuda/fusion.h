@@ -101,11 +101,11 @@ class TORCH_CUDA_CU_API Fusion final {
 
   //! Register input as an input of the fusion
   // TODO: Rename to register
-  void addInput(Val* input, bool reset_fusion = true);
+  void addInput(Val* input);
 
   //! Register output as an output of the fusion
   // TODO: Rename to register
-  void addOutput(Val* output, bool reset_fusion = true);
+  void addOutput(Val* output);
 
   //! Register output as an output of the fusion
   // TODO: Rename to register
@@ -113,11 +113,11 @@ class TORCH_CUDA_CU_API Fusion final {
 
   //! Deregister input as an input of the fusion
   // TODO: Rename to register
-  void removeInput(Val* input, bool reset_fusion = true);
+  void removeInput(Val* input);
 
   //! Deregister output as an output of the fusion
   // TODO: Rename to register
-  void removeOutput(Val* output, bool reset_fusion = true);
+  void removeOutput(Val* output);
 
   //! Replace output with another value
   void replaceOutput(Val* output, Val* replacement);
@@ -228,6 +228,14 @@ class TORCH_CUDA_CU_API Fusion final {
   std::unordered_set<int> getOutputAliasIndices() const;
   std::vector<std::pair<int, int>> getInputAliasIndices() const;
 
+  bool isTVUseInfoValid() {
+    return all_tv_uses_valid_;
+  }
+
+  bool isUpdatingTVUseInfo() {
+    return is_during_update_uses_;
+  }
+
  protected:
   friend SegmentCandidateFinder;
   friend SegmentedFusion;
@@ -264,6 +272,11 @@ class TORCH_CUDA_CU_API Fusion final {
 
   // io alias pointing from output to input
   std::unordered_map<Val*, Val*> io_alias_;
+
+  // Records if the current use data in the IR nodes are valid
+  //  the states are either all valid or all invalid
+  bool all_tv_uses_valid_ = false;
+  bool is_during_update_uses_ = false;
 };
 
 } // namespace cuda

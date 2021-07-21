@@ -220,7 +220,7 @@ void Fusion::removeVal(Val* val) {
   delete val;
 }
 
-void Fusion::addInput(Val* input, bool reset_fusion) {
+void Fusion::addInput(Val* input) {
   assertInFusion(input, "Cannot register input ");
 
   if (input->getValType().value() == ValType::TensorView) {
@@ -231,12 +231,10 @@ void Fusion::addInput(Val* input, bool reset_fusion) {
   inputs_.push_back(input);
   input->setIsFusionInput(true);
 
-  if (reset_fusion) {
-    resetTvUses();
-  }
+  all_tv_uses_valid_ = false;
 }
 
-void Fusion::addOutput(Val* output, bool reset_fusion) {
+void Fusion::addOutput(Val* output) {
   assertInFusion(output, "Cannot register output ");
   if (output->getValType().value() == ValType::TensorView) {
     auto tv = output->as<TensorView>();
@@ -245,9 +243,7 @@ void Fusion::addOutput(Val* output, bool reset_fusion) {
   outputs_.push_back(output);
   output->setIsFusionOutput(true);
 
-  if (reset_fusion) {
-    resetTvUses();
-  }
+  all_tv_uses_valid_ = false;
 }
 
 void Fusion::addOutput(WelfordResult& wr) {
@@ -259,26 +255,22 @@ void Fusion::addOutput(WelfordResult& wr) {
   addOutput(wr.avg);
 }
 
-void Fusion::removeInput(Val* input, bool reset_fusion) {
+void Fusion::removeInput(Val* input) {
   auto find_input = std::find(inputs_.begin(), inputs_.end(), input);
   if (find_input != inputs_.end()) {
     inputs_.erase(find_input);
   }
   input->setIsFusionInput(false);
-  if (reset_fusion) {
-    resetTvUses();
-  }
+  all_tv_uses_valid_ = false;
 }
 
-void Fusion::removeOutput(Val* output, bool reset_fusion) {
+void Fusion::removeOutput(Val* output) {
   auto find_output = std::find(outputs_.begin(), outputs_.end(), output);
   if (find_output != outputs_.end()) {
     outputs_.erase(find_output);
   }
   output->setIsFusionOutput(false);
-  if (reset_fusion) {
-    resetTvUses();
-  }
+  all_tv_uses_valid_ = false;
 }
 
 void Fusion::replaceOutput(Val* output, Val* replacement) {
@@ -472,6 +464,7 @@ StmtNameType Fusion::registerStatement(Statement* stmt) {
 
 void Fusion::resetTvUses() {
   FUSER_PERF_SCOPE("Fusion::resetTvUses");
+  is_during_update_uses_ = true;
 
   // getExprs only uses definition, so even if we've modified uses already to
   // remove dead exprs, this could reinsert them. getExprs is also boundeds by
@@ -494,6 +487,9 @@ void Fusion::resetTvUses() {
       }
     }
   }
+
+  all_tv_uses_valid_ = true;
+  is_during_update_uses_ = false;
 }
 
 const std::unordered_set<Val*>& Fusion::vals() const noexcept {

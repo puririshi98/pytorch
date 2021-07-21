@@ -1495,22 +1495,20 @@ class FusionSegmentGuard : public NonCopyable {
     FUSER_PERF_SCOPE("Segmenter::FusionSegmentGuard");
     TORCH_INTERNAL_ASSERT(fusion_ != nullptr);
     for (auto old_inp : old_inputs_) {
-      fusion_->removeInput(old_inp, false);
+      fusion_->removeInput(old_inp);
     }
 
     for (auto old_out : old_outputs_) {
-      fusion_->removeOutput(old_out, false);
+      fusion_->removeOutput(old_out);
     }
 
     for (auto new_inp : new_inputs_) {
-      fusion_->addInput(new_inp, false);
+      fusion_->addInput(new_inp);
     }
 
     for (auto new_out : new_outputs_) {
-      fusion_->addOutput(new_out, false);
+      fusion_->addOutput(new_out);
     }
-
-    fusion_->resetTvUses();
   }
 
   ~FusionSegmentGuard() {
@@ -1520,22 +1518,20 @@ class FusionSegmentGuard : public NonCopyable {
       return;
     }
     for (auto new_inp : new_inputs_) {
-      fusion_->removeInput(new_inp, false);
+      fusion_->removeInput(new_inp);
     }
 
     for (auto new_out : new_outputs_) {
-      fusion_->removeOutput(new_out, false);
+      fusion_->removeOutput(new_out);
     }
 
     for (auto old_inp : old_inputs_) {
-      fusion_->addInput(old_inp, false);
+      fusion_->addInput(old_inp);
     }
 
     for (auto old_out : old_outputs_) {
-      fusion_->addOutput(old_out, false);
+      fusion_->addOutput(old_out);
     }
-
-    fusion_->resetTvUses();
   }
 
  private:
