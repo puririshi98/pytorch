@@ -553,6 +553,9 @@ TensorView* scheduleReductionTV(
         if (rparams.vectorize) {
           reference_tv->axis(reduce_axis + 3)
               ->parallelize(ParallelType::Vectorize);
+        } else {
+          reference_tv->axis(reduce_axis + 3)
+              ->parallelize(ParallelType::Unroll);
         }
         reference_tv->axis(reduce_axis + 2)
             ->parallelize(ParallelType::Unswitch);
@@ -604,6 +607,7 @@ TensorView* scheduleReductionTV(
 
         reference_tv->axis(1)->parallelize(ParallelType::TIDy);
         reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
+        reference_tv->axis(4)->parallelize(ParallelType::Unroll);
         reference_tv->axis(5)->parallelize(ParallelType::TIDx);
 
         if (rparams.split_grid_dim) {
@@ -676,6 +680,9 @@ TensorView* scheduleReductionTV(
         if (rparams.vectorize) {
           reference_tv->axis(reduce_axis + 5)
               ->parallelize(ParallelType::Vectorize);
+        } else {
+          reference_tv->axis(reduce_axis + 5)
+              ->parallelize(ParallelType::Unroll);
         }
         reference_tv->axis(reduce_axis + 4)
             ->parallelize(ParallelType::Unswitch);
@@ -759,6 +766,9 @@ TensorView* scheduleReductionTV(
         if (rparams.vectorize) {
           reference_tv->axis(reduce_axis + 3)
               ->parallelize(ParallelType::Vectorize);
+        } else {
+          reference_tv->axis(reduce_axis + 3)
+              ->parallelize(ParallelType::Unroll);
         }
         reference_tv->axis(reduce_axis + 2)
             ->parallelize(ParallelType::Unswitch);
@@ -815,6 +825,7 @@ TensorView* scheduleReductionTV(
             reduction_tv,
             {4, 5, 6}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
+        reference_tv->axis(6)->parallelize(ParallelType::Unroll);
         reference_tv->axis(5)->parallelize(ParallelType::Unswitch);
         reference_tv->axis(3)->parallelize(ParallelType::TIDy);
         reference_tv->axis(2)->parallelize(ParallelType::BIDy);
@@ -857,6 +868,7 @@ TensorView* scheduleReductionTV(
               reduction_tv,
               {3, 4, 5}); // NOLINT(cppcoreguidelines-avoid-magic-numbers)
 
+          reference_tv->axis(5)->parallelize(ParallelType::Unroll);
           reference_tv->axis(4)->parallelize(ParallelType::Unswitch);
           reference_tv->axis(2)->parallelize(ParallelType::TIDy);
           reference_tv->axis(1)->parallelize(ParallelType::TIDx);
@@ -917,6 +929,8 @@ TensorView* scheduleReductionTV(
           reference_tv->axis(1)->parallelize(ParallelType::TIDx);
           if (rparams.vectorize) {
             reference_tv->axis(4)->parallelize(ParallelType::Vectorize);
+          } else {
+            reference_tv->axis(4)->parallelize(ParallelType::Unroll);
           }
           reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
           reference_tv->axis(0)->parallelize(ParallelType::BIDx);
@@ -960,6 +974,7 @@ TensorView* scheduleReductionTV(
           reference_tv->axis(1)->parallelize(ParallelType::TIDx);
           reference_tv->axis(2)->parallelize(ParallelType::TIDy);
           reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
+          reference_tv->axis(4)->parallelize(ParallelType::Unroll);
         } else {
           reference_tv = ir_utils::rfactorHelper(
               reduction_tv,
@@ -967,6 +982,7 @@ TensorView* scheduleReductionTV(
           reference_tv->axis(0)->parallelize(ParallelType::BIDx);
           reference_tv->axis(1)->parallelize(ParallelType::TIDx);
           reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
+          reference_tv->axis(4)->parallelize(ParallelType::Unroll);
         }
       } else {
         // No parallelization on reduction, unroll iter axis
@@ -1026,6 +1042,8 @@ TensorView* scheduleReductionTV(
         reference_tv->axis(3)->parallelize(ParallelType::Unswitch);
         if (rparams.vectorize) {
           reference_tv->axis(4)->parallelize(ParallelType::Vectorize);
+        } else {
+          reference_tv->axis(4)->parallelize(ParallelType::Unroll);
         }
       }
     }
@@ -1176,6 +1194,64 @@ void multiReductionInliner(
       }
     }
 
+    // Cache outputs
+    std::vector<TensorView*> compute_to;
+    for (auto cached_output_pair : cached_outputs) {
+      auto cached_output = cached_output_pair.first;
+      auto output = cached_output_pair.second;
+
+      // If an output has multiple uses, it should already have computeAt set,
+      // don't intefere.
+      if (cached_output->uses().size() > 1) {
+        continue;
+      }
+
+      auto pos_it = std::find_if(
+          output->domain()->domain().begin(),
+          output->domain()->domain().end(),
+          [&mapped_to_trivial_reduction](IterDomain* id) {
+            return id->getParallelType() == ParallelType::Unswitch ||
+                id->getParallelType() == ParallelType::Unroll ||
+                id->getParallelType() == ParallelType::Vectorize ||
+                id->getParallelType() == ParallelType::MisalignedVectorize ||
+                mapped_to_trivial_reduction.count(id);
+          });
+      auto pos = pos_it == output->domain()->domain().end()
+          ? -1
+          : std::distance(output->domain()->domain().begin(), pos_it) + 1;
+
+      cached_output->computeAt(output, pos, ComputeAtMode::BestEffort);
+
+      compute_to.push_back(cached_output);
+      if (rparams.vectorize) {
+        if (std::find(
+                vecotrizable_inputs_outputs.begin(),
+                vecotrizable_inputs_outputs.end(),
+                output) != vecotrizable_inputs_outputs.end()) {
+          keep_unrolled.emplace(output);
+        }
+      } else {
+        keep_unrolled.emplace(output);
+      }
+    }
+
+    // Before compute at-ing the internal structure, remove vectorization
+    // anywhere it doesn't belong. Otherwise it will mess up our inlining. Clear
+    // explicit unroll or vectorization when not for input or output GMEM
+    // transfers.
+    for (auto tv : ir_utils::allTvs(fusion)) {
+      if (!keep_unrolled.count(tv)) {
+        for (size_t i = 0; i < tv->nDims(); i++) {
+          auto id = tv->axis((int)i);
+          if (id->getParallelType() == ParallelType::Unroll ||
+              id->getParallelType() == ParallelType::Vectorize ||
+              id->getParallelType() == ParallelType::MisalignedVectorize) {
+            tv->axis((int)i)->parallelize(ParallelType::Serial);
+          }
+        }
+      }
+    }
+
     // Make sure not to completely inline if there's trivial reductions in the
     // fusion
     auto pos_it = std::find_if(
@@ -1193,6 +1269,7 @@ void multiReductionInliner(
     computeAtBetween(
         compute_from, rfactor_tvs, pos, ComputeAtMode::MostInlined);
 
+    // fusion->printMath();
     // Inline rfactor into reduction
     if (reference_tv != reduction_tv) {
       // Compute at rfactor into following reduction, keep outside first
@@ -1244,67 +1321,12 @@ void multiReductionInliner(
     compute_from.insert(
         compute_from.end(), reduction_tvs.begin(), reduction_tvs.end());
 
-    std::vector<TensorView*> compute_to;
-    for (auto cached_output_pair : cached_outputs) {
-      auto cached_output = cached_output_pair.first;
-      auto output = cached_output_pair.second;
-
-      // If an output has multiple uses, it should already have computeAt set,
-      // don't intefere.
-      if (cached_output->uses().size() > 1) {
-        continue;
-      }
-
-      pos_it = std::find_if(
-          output->domain()->domain().begin(),
-          output->domain()->domain().end(),
-          [&mapped_to_trivial_reduction](IterDomain* id) {
-            return id->getParallelType() == ParallelType::Unswitch ||
-                id->getParallelType() == ParallelType::Unroll ||
-                id->getParallelType() == ParallelType::Vectorize ||
-                id->getParallelType() == ParallelType::MisalignedVectorize ||
-                mapped_to_trivial_reduction.count(id);
-          });
-      pos = pos_it == output->domain()->domain().end()
-          ? -1
-          : std::distance(output->domain()->domain().begin(), pos_it) + 1;
-
-      cached_output->computeAt(output, pos, ComputeAtMode::BestEffort);
-
-      compute_to.push_back(cached_output);
-      if (rparams.vectorize) {
-        if (std::find(
-                vecotrizable_inputs_outputs.begin(),
-                vecotrizable_inputs_outputs.end(),
-                output) != vecotrizable_inputs_outputs.end()) {
-          keep_unrolled.emplace(output);
-        }
-      } else {
-        keep_unrolled.emplace(output);
-      }
-    }
-
     computeAtBetween(
         compute_from,
         compute_to,
         -1,
         ComputeAtMode::BestEffort,
         mapped_to_trivial_reduction);
-
-    // Clear explicit unroll or vectorization when not for input or output GMEM
-    // transfers.
-    for (auto tv : ir_utils::allTvs(fusion)) {
-      if (!keep_unrolled.count(tv)) {
-        for (size_t i = 0; i < tv->nDims(); i++) {
-          auto id = tv->axis((int)i);
-          if (id->getParallelType() == ParallelType::Unroll ||
-              id->getParallelType() == ParallelType::Vectorize ||
-              id->getParallelType() == ParallelType::MisalignedVectorize) {
-            tv->axis((int)i)->parallelize(ParallelType::Serial);
-          }
-        }
-      }
-    }
 
   } else {
     // Want to inline, especially backwards based on reduction_tv, otherwise

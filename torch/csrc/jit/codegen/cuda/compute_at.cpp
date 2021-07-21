@@ -70,7 +70,8 @@ unsigned int getReplayablePosPasC(
   auto c_dom = consumer->domain()->domain();
   auto vector_dim_it =
       std::find_if(c_dom.begin(), c_dom.end(), [](IterDomain* id) {
-        return isParallelTypeVectorize(id->getParallelType());
+        return isParallelTypeVectorize(id->getParallelType()) ||
+            id->getParallelType() == ParallelType::Unroll;
       });
 
   // Limit max position based on vectorized dims in consumer.
@@ -95,7 +96,8 @@ unsigned int getReplayablePosPasC(
       // If we find a consumer dim that maps to a producer dim that's
       // vectorized, or to a producer dim that's a block broadcast, limit max
       // compute at by it
-      if (isParallelTypeVectorize(p_id->getParallelType())) {
+      if (isParallelTypeVectorize(p_id->getParallelType()) ||
+          p_id->getParallelType() == ParallelType::Unroll) {
         max_consumer_pos = consumer_pos - 1;
       }
     }
@@ -153,7 +155,8 @@ unsigned int getReplayablePosCasP(
 
   auto first_vectorized_axis =
       std::find_if(p_dom.begin(), first_reduction, [](IterDomain* id) {
-        return isParallelTypeVectorize(id->getParallelType());
+        return isParallelTypeVectorize(id->getParallelType()) ||
+            id->getParallelType() == ParallelType::Unroll;
       });
 
   auto max_producer_pos = std::distance(p_dom.begin(), first_vectorized_axis);
@@ -175,7 +178,8 @@ unsigned int getReplayablePosCasP(
       auto c_id = map_it->second;
       // If we find a producer dim that maps to a consumer vectorized dim, limit
       // max compute at by it
-      if (isParallelTypeVectorize(c_id->getParallelType())) {
+      if (isParallelTypeVectorize(c_id->getParallelType()) ||
+          c_id->getParallelType() == ParallelType::Unroll) {
         max_producer_pos = producer_pos - 1;
       }
     }

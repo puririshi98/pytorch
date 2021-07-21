@@ -44,7 +44,7 @@ ReductionParams innerNormalizationHeuristic(
       (int64_t)16 / (int64_t)max_input_dtype_size,
       // Reduce unrolling if we have many inputs, start reduction at 4 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 2),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs - 1) >> 1),
           (int64_t)1));
 
   // Conservative value, could be set to larger based on arch if necessary.
@@ -73,7 +73,6 @@ ReductionParams innerNormalizationHeuristic(
                   (n_tensor_inputs * max_input_dtype_size * active_threads),
               (int64_t)1)),
       (int64_t)32);
-
 
   // Take the smaller
   const int64_t warp_size =
@@ -109,7 +108,8 @@ ReductionParams innerNormalizationHeuristic(
         target_unroll *= 2;
       }
 
-      if (target_iterations * 2 <= ceilDiv(min_target_iterations, max_unroll) && !flip) {
+      if (target_iterations * 2 <= ceilDiv(min_target_iterations, max_unroll) &&
+          !flip) {
         target_iterations *= 2;
       }
 
@@ -122,7 +122,8 @@ ReductionParams innerNormalizationHeuristic(
       flip = !flip;
     }
 
-    target_blocks = ceilDiv(n_elems, warp_size * target_unroll * target_iterations);
+    target_blocks =
+        ceilDiv(n_elems, warp_size * target_unroll * target_iterations);
   }
 
   // Cap target blocks to 4 waves
@@ -169,7 +170,7 @@ ReductionParams innerNormalizationHeuristic(
 
   // Grab what we can out of reduction domain, but don't go over a warp size yet
   bdimx = std::min(num_elems_in_reduction, (int64_t)warp_size);
-  
+
   // Put everything else in bdimy for now
   bdimy = std::min(
       std::max(max_threads_in_block / bdimx, (int64_t)1),
@@ -192,9 +193,11 @@ ReductionParams innerNormalizationHeuristic(
   } else {
     // If we have reduction elements left, re-adjust the block dims
     bdimx = std::min(
-        std::max(ceilDiv(num_elems_in_reduction, target_iterations * target_unroll), warp_size),
+        std::max(
+            ceilDiv(num_elems_in_reduction, target_iterations * target_unroll),
+            warp_size),
         max_threads_in_block);
-        
+
     // Don't exceed target.
     bdimy = std::min(
         std::max(max_threads_in_block / bdimx, (int64_t)1),
@@ -343,7 +346,7 @@ ReductionParams OuterNormalizationHeuristic(
       (int64_t)16 / (int64_t)max_input_dtype_size,
       // Reduce unrolling if we have many inputs, start reduction at 4 inputs
       std::max(
-          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs) >> 2),
+          (scheduler_utils::lastPow2((int64_t)n_tensor_inputs - 1) >> 1),
           (int64_t)1));
 
   // If we have one warp per block, how many blocks would that be?

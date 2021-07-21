@@ -139,13 +139,12 @@ ReductionParams innerReductionHeuristic(
   bdimx = std::min(num_elems_in_reduction, (int64_t)warp_size);
   // Put everything else in bdimy for now
   bdimy = std::max(max_threads_in_block / bdimx, (int64_t)1);
-
   int64_t remainder_in_reduction = ceilDiv(num_elems_in_reduction, bdimx);
   int64_t remainder_in_output = ceilDiv(num_outputs_for_reduction, bdimy);
 
   // Adjust blocking and setup unrolling
   if (remainder_in_reduction == 1) {
-    // Small number of reduction elements,try unrolling output dimension
+    // Small number of reduction elements, try unrolling output dimension
     unroll_factor = std::min(target_unroll, remainder_in_output);
     if (unroll_factor > 1) {
       unroll_reduction = false;
