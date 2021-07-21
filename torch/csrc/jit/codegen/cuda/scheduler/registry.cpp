@@ -295,18 +295,32 @@ class SchedulerTopologyChecker {
     // If reduction is on fastest dim, don't fuse any non Unary or Broadcast
     // operations post reduction.
     if (fastest_dim_reduction) {
-      auto dependent_vals = DependencyCheck::getAllValsBetween(
+      auto post_reduction_vals = DependencyCheck::getAllValsBetween(
           {reduction_tvs.begin(), reduction_tvs.end()},
           {fusion->outputs().begin(), fusion->outputs().end()});
+
+      if (post_reduction_vals.empty()) {
+        return true;
+      }
+
+      auto reduction_inputs = IterVisitor::getInputsTo(
+          {reduction_tvs.begin(), reduction_tvs.end()});
+
       for (auto tv : ir_utils::filterByType<TensorView>(
-               dependent_vals.begin(), dependent_vals.end())) {
+               post_reduction_vals.begin(), post_reduction_vals.end())) {
         if (tv->definition() == nullptr) {
           continue;
         }
-        if (tv->definition()->isA<BinaryOp>() ||
-            tv->definition()->isA<TransposeOp>() ||
-            tv->definition()->isA<TernaryOp>() ||
-            tv->definition()->isA<ShiftOp>()) {
+
+        auto tv_inputs = IterVisitor::getInputsTo({tv});
+
+        if (std::any_of(
+                tv_inputs.begin(),
+                tv_inputs.end(),
+                [&reduction_inputs](Val* inp) {
+                  return inp->isA<TensorView>() &&
+                      reduction_inputs.find(inp) == reduction_inputs.end();
+                })) {
           return false;
         }
       }
