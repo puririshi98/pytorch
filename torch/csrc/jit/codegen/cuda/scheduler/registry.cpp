@@ -834,7 +834,7 @@ class NormalizationScheduler : public SchedulerEntry {
     auto& persistent_buffers = persistent_buffer_data.read();
 
     auto persistent_buffer_size = scheduler_utils::persistentBufferSize(
-        fusion, runtime_info, persistent_buffers);
+        fusion, runtime_info, persistent_buffers, data_cache);
     if (persistent_buffer_size * 4 > scheduler_utils::register_file_size * 3) {
       return false;
     }

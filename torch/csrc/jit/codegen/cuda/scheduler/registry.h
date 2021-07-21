@@ -208,6 +208,11 @@ class TORCH_CUDA_CU_API SchedulerEntryHash {
 std::string toString(ScheduleHeuristic sh);
 
 class TORCH_CUDA_CU_API HeuristicSummary {
+  using ValToFactorMap = std::unordered_map<Val*, int>;
+  using ValToFactorMapPtr = std::unique_ptr<ValToFactorMap>;
+  using ScopedPersistenceFactorMap =
+      std::unordered_map<Val*, ValToFactorMapPtr>;
+
  public:
   HeuristicSummary(
       Fusion* fusion,
@@ -302,6 +307,22 @@ class TORCH_CUDA_CU_API HeuristicSummary {
     return has_post_reduction_bcast_.get();
   }
 
+  void setScopedPersistenceFactorMap(const ScopedPersistenceFactorMap& input) {
+    TORCH_INTERNAL_ASSERT(recording_);
+
+    scope_persistence_factor_map_ =
+        std::make_unique<ScopedPersistenceFactorMap>();
+    for (const auto& it : input) {
+      ValToFactorMap& to_copy = *(it.second);
+      scope_persistence_factor_map_->operator[](it.first) =
+          std::make_unique<ValToFactorMap>(to_copy);
+    }
+  }
+
+  auto* getScopedPersistenceFactorMap() {
+    return scope_persistence_factor_map_.get();
+  }
+
  private:
   ScheduleHeuristic heuristic_;
   bool recording_ = true;
@@ -313,6 +334,7 @@ class TORCH_CUDA_CU_API HeuristicSummary {
       persistent_buffer_info_;
   std::unique_ptr<bool> has_post_reduction_bcast_;
   std::unique_ptr<bool> supported_post_reduction_fusion_;
+  std::unique_ptr<ScopedPersistenceFactorMap> scope_persistence_factor_map_;
 };
 
 // A temporary utility class to save some boilerplate code when
@@ -332,6 +354,10 @@ class HeuristicCacheAccessor {
 
   void writeNew(T data) {
     owned_data_ = std::make_unique<T>(std::move(data));
+  }
+
+  void takeNew(std::unique_ptr<T>& data) {
+    owned_data_ = std::move(data);
   }
 
   void writeTemporary(T* data) {

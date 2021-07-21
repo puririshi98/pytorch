@@ -659,7 +659,7 @@ TORCH_CUDA_CU_API c10::optional<ReductionParams> getNormalizationHeuristics(
       scheduler_utils::getProperties(fusion, runtime_info, first_red_tv);
 
   auto max_persistent_size = scheduler_utils::persistentBufferSize(
-      fusion, runtime_info, persistent_buffers);
+      fusion, runtime_info, persistent_buffers, data_cache);
 
   HeuristicCacheAccessor<std::vector<TensorView*>>
       vectorizable_inputs_outputs_data;

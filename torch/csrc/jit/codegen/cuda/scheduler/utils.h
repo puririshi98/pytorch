@@ -134,7 +134,8 @@ void computeAtBetween(
 int64_t persistentBufferSize(
     Fusion* fusion,
     SchedulerRuntimeInfo& runtime_info,
-    PersistentBufferInfo& persistent_buffers);
+    PersistentBufferInfo& persistent_buffers,
+    HeuristicSummary* data_cache = nullptr);
 
 // Returns a set of all iteration domains (in roots of tensors) that map to a
 // trivial reduction

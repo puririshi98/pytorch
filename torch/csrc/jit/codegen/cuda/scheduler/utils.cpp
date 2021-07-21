@@ -315,7 +315,8 @@ void computeAtBetween(
 int64_t persistentBufferSize(
     Fusion* fusion,
     SchedulerRuntimeInfo& runtime_info,
-    PersistentBufferInfo& persistent_buffers) {
+    PersistentBufferInfo& persistent_buffers,
+    HeuristicSummary* data_cache) {
   FUSER_PERF_SCOPE("scheduler_utils::persistentBufferSize");
 
   if (persistent_buffers.buffers.empty()) {
@@ -324,7 +325,88 @@ int64_t persistentBufferSize(
 
   int64_t persistent_buffer_size = 0;
 
-  // Measure at each output how much persistent memory is being used
+  using ValToFactorMap = std::unordered_map<Val*, int>;
+  using ValToFactorMapPtr = std::unique_ptr<ValToFactorMap>;
+  using ScopedPersistenceFactorMap =
+      std::unordered_map<Val*, ValToFactorMapPtr>;
+
+  HeuristicCacheAccessor<ScopedPersistenceFactorMap>
+      scoped_persistent_factor_data;
+  // TODO: move all these boilerplate code into the accessor class
+  // (follow up)
+
+  // Caching traversal result in this case.
+  //  This one is slightly more involving. The end result we want is all the
+  //  concrete
+  //   int values in scoped_persistence. Essentially:
+  //     scoped_persistence [val] = sum_over_all_persistent_tv (
+  //     contrubution_from_tv_to_val * persistent_size_of_tv  )
+  //  Here contrubution_from_tv_to_val can be determined at compile time.
+  //  persistent_size_of_tv is a runtime value but
+  //   doesn't require heavy graph traversal.
+  //  So in this cache entry we try to save a matrix of contribution factors,
+  //  i.e.
+  //
+  //   new_persistent_factor_map[tv][val] = contribution_from_tv_to_val, from
+  //   compile time and we combine the factor
+  //
+  //   with runtime persistent buffer sizes at runtime.
+  if (data_cache && !data_cache->isRecording()) {
+    scoped_persistent_factor_data.writeTemporary(
+        data_cache->getScopedPersistenceFactorMap());
+  } else {
+    // Compute new scoped persisitence factor:
+    auto new_persistent_factor_map_ptr =
+        std::make_unique<ScopedPersistenceFactorMap>();
+    auto& new_persistent_factor_map = *new_persistent_factor_map_ptr;
+
+    for (auto tv : persistent_buffers.buffers) {
+      auto& consumer_tv_to_factor_map_ptr = new_persistent_factor_map[tv];
+      consumer_tv_to_factor_map_ptr = std::make_unique<ValToFactorMap>();
+      auto& consumer_tv_to_factor_map = *consumer_tv_to_factor_map_ptr;
+
+      // All expressions between tv and its consumers must have tv's persistent
+      // buffer allocated. This is an optimistic view on how many registers we
+      // need allocated in the kernel, since if we ordered two persistent
+      // buffers that are completely independent to somehow overlap with
+      // eachother we would assume we wouldn't need those two buffers active at
+      // the same time, even though they would be.
+      //
+      // Unfortunately this limitation is hard to work around as we would have
+      // to actually generate the kernel before we know if it would fit
+      // persistently in registers. In practice, though, this should not happen
+      // as inlining loop structures where the persistent buffer is used should
+      // prevent muiltiple persistent buffers from being merged togther if not
+      // necessary.
+      auto consumers_of_tv = ir_utils::consumerTvsOf(tv);
+      for (auto val : DependencyCheck::getAllValsBetween(
+               {tv}, {consumers_of_tv.begin(), consumers_of_tv.end()})) {
+        // Persistent normalization kernels imply that all persistent buffers
+        // have the same dimensionality. Assume if a persistent buffer is
+        // consumed by another we can alias and reuse the memory.
+        if (val == tv) {
+          continue;
+        }
+
+        if (consumer_tv_to_factor_map.count(val)) {
+          consumer_tv_to_factor_map.at(val) += 1;
+        } else {
+          consumer_tv_to_factor_map[val] = 1;
+        }
+      }
+    }
+
+    // Caching boilerplate (TO be cleaned up in a follow up)
+    scoped_persistent_factor_data.takeNew(new_persistent_factor_map_ptr);
+    if (data_cache && data_cache->isRecording()) {
+      data_cache->setScopedPersistenceFactorMap(
+          scoped_persistent_factor_data.read());
+    }
+  }
+
+  auto& scoped_persistence_factor = scoped_persistent_factor_data.read();
+
+  // Runtime: convert the persistent factor to actual values
   std::unordered_map<Val*, int64_t> scoped_persistence;
 
   for (auto tv : persistent_buffers.buffers) {
@@ -349,39 +431,28 @@ int64_t persistentBufferSize(
         tv_persistent_numel *= id_size.value();
       }
     }
+
     persistent_buffer_size =
         tv_persistent_numel * dataTypeSize(tv->getDataType().value());
 
-    // All expressions between tv and its consumers must have tv's persistent
-    // buffer allocated. This is an optimistic view on how many registers we
-    // need allocated in the kernel, since if we ordered two persistent
-    // buffers that are completely independent to somehow overlap with
-    // eachother we would assume we wouldn't need those two buffers active at
-    // the same time, even though they would be.
-    //
-    // Unfortunately this limitation is hard to work around as we would have
-    // to actually generate the kernel before we know if it would fit
-    // persistently in registers. In practice, though, this should not happen
-    // as inlining loop structures where the persistent buffer is used should
-    // prevent muiltiple persistent buffers from being merged togther if not
-    // necessary.
-    auto consumers_of_tv = ir_utils::consumerTvsOf(tv);
-    for (auto val : DependencyCheck::getAllValsBetween(
-             {tv}, {consumers_of_tv.begin(), consumers_of_tv.end()})) {
-      // Persistent normalization kernels imply that all persistent buffers
-      // have the same dimensionality. Assume if a persistent buffer is
-      // consumed by another we can alias and reuse the memory.
-      if (val == tv) {
-        continue;
-      }
+    // Look up the contribution part from the cached matrix:
+    auto scoped_factor_it = scoped_persistence_factor.find(tv);
+    if (scoped_factor_it != scoped_persistence_factor.end()) {
+      // now looking at scoped_persistence_factor[tv]
+      for (auto val_to_factor_it : *(scoped_factor_it->second)) {
+        // (val_to_factor_it) is (val, factor)
+        int64_t persistent_buffer_size_contribution =
+            persistent_buffer_size * val_to_factor_it.second;
 
-      // TODO: this is slightly more involving to cache,
-      //  but could definitely do if the saving one all vals in between
-      //  is large enough.
-      if (scoped_persistence.find(val) != scoped_persistence.end()) {
-        scoped_persistence.at(val) += persistent_buffer_size;
-      } else {
-        scoped_persistence[val] = persistent_buffer_size;
+        //  try to write factor * persistent_buffer_size into
+        //  scoped_persistence[val]
+        auto val_it = scoped_persistence.find(val_to_factor_it.first);
+        if (val_it == scoped_persistence.end()) {
+          scoped_persistence[val_to_factor_it.first] =
+              persistent_buffer_size_contribution;
+        } else {
+          val_it->second += persistent_buffer_size_contribution;
+        }
       }
     }
   }
