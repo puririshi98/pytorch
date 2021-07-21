@@ -1492,6 +1492,8 @@ class FusionSegmentGuard : public NonCopyable {
         old_outputs_(fusion->outputs()),
         new_inputs_(std::move(inputs)),
         new_outputs_(std::move(outputs)) {
+    FUSER_PERF_SCOPE("~Segmenter::FusionSegmentGuard");
+
     TORCH_INTERNAL_ASSERT(fusion_ != nullptr);
     for (auto old_inp : old_inputs_) {
       fusion_->removeInput(old_inp);
@@ -1511,6 +1513,8 @@ class FusionSegmentGuard : public NonCopyable {
   }
 
   ~FusionSegmentGuard() {
+    FUSER_PERF_SCOPE("~Segmenter::FusionSegmentGuard");
+
     if (fusion_ == nullptr) {
       return;
     }
@@ -1598,7 +1602,8 @@ c10::optional<std::unique_ptr<SchedulerEntry>> SegmentedGroup::
   auto fusion = segmented_fusion_->completeFusion();
   auto data_cache = segmented_fusion_->getCachedHeuristicDataFor(this);
   FusionSegmentGuard fsg(fusion, getAllInputs(this), getAllOutputs(this));
-  if (!SchedulerEntry::canSchedule(heuristic(), fusion, runtime_info, true)) {
+  if (!SchedulerEntry::canSchedule(
+          heuristic(), fusion, runtime_info, data_cache)) {
     return c10::nullopt;
   }
   return SchedulerEntry::makeEntry(

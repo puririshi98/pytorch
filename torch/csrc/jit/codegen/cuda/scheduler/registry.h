@@ -129,7 +129,7 @@ class TORCH_CUDA_CU_API SchedulerEntry {
       ScheduleHeuristic sh,
       Fusion* fusion,
       SchedulerRuntimeInfo& runtime_info,
-      bool input_dependent_check_only = false);
+      HeuristicSummary* data_cache = nullptr);
 
   //! Fusion segmenter facing API,
   //!   returns a schedule that applies in the given fusion, returns a nullopt

@@ -315,6 +315,8 @@ int64_t persistentBufferSize(
     Fusion* fusion,
     SchedulerRuntimeInfo& runtime_info,
     PersistentBufferInfo& persistent_buffers) {
+  FUSER_PERF_SCOPE("scheduler_utils::persistentBufferSize");
+
   if (persistent_buffers.buffers.empty()) {
     return 0;
   }

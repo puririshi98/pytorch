@@ -671,7 +671,7 @@ c10::optional<FusionKernelRuntime::HeuristicsPtr> FusionKernelRuntime::
   auto& complete_fusion_scheduler = schedulers()[0];
   auto complete_fusion_heuristic = complete_fusion_scheduler->heuristc();
   if (!SchedulerEntry::canSchedule(
-          complete_fusion_heuristic, complete_fusion, runtime_info, true)) {
+          complete_fusion_heuristic, complete_fusion, runtime_info)) {
     return c10::nullopt;
   }
 

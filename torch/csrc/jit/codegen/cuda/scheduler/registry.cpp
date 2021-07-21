@@ -633,8 +633,8 @@ class SingleReductionScheduler : public SchedulerEntry {
   static bool canSchedule(
       Fusion* fusion,
       SchedulerRuntimeInfo& runtime_info,
-      bool input_dependent_check_only = false) {
-    if (input_dependent_check_only) {
+      HeuristicSummary* data_cache = nullptr) {
+    if (data_cache) {
       return true;
     }
 
@@ -690,8 +690,8 @@ class PointWiseScheduler : public SchedulerEntry {
   static bool canSchedule(
       Fusion* fusion,
       SchedulerRuntimeInfo& runtime_info,
-      bool input_dependent_check_only = false) {
-    if (input_dependent_check_only) {
+      HeuristicSummary* data_cache = nullptr) {
+    if (data_cache) {
       return true;
     }
     auto red_ops = findReductionOps(fusion);
@@ -732,7 +732,7 @@ class NormalizationScheduler : public SchedulerEntry {
   static bool canSchedule(
       Fusion* fusion,
       SchedulerRuntimeInfo& runtime_info,
-      bool input_dependent_check_only = false) {
+      HeuristicSummary* data_cache = nullptr) {
     FUSER_PERF_SCOPE("NormalizationScheduler::canSchedule");
 
     std::vector<TensorView*> reduction_tvs;
@@ -742,7 +742,7 @@ class NormalizationScheduler : public SchedulerEntry {
       }
     }
 
-    if (!input_dependent_check_only) {
+    if (!data_cache) {
       if (reduction_tvs.size() == 0) {
         // Use single reduction or pointwise logic
         return false;
@@ -792,7 +792,25 @@ class NormalizationScheduler : public SchedulerEntry {
       }
     }
 
-    auto persistent_buffers = scheduler_utils::persistentBuffers(fusion);
+    // TODO: move all these boilerplate code into the accessor class
+    // (follow up)
+    // Note: this persistent buffer is actually cached from
+    //  getNormalizationHeuristics. Will need to create a separate
+    //  cache entry if they are not the same.
+    HeuristicCacheAccessor<scheduler_utils::PersistentBufferInfo>
+        persistent_buffer_data;
+
+    if (data_cache && !data_cache->isRecording()) {
+      persistent_buffer_data.writeTemporary(
+          data_cache->getPersistentBufferInfo());
+    } else {
+      persistent_buffer_data.writeNew(
+          scheduler_utils::persistentBuffers(fusion));
+      if (data_cache && data_cache->isRecording()) {
+        data_cache->setPersistentBufferInfo(persistent_buffer_data.read());
+      }
+    }
+    auto& persistent_buffers = persistent_buffer_data.read();
 
     auto persistent_buffer_size = scheduler_utils::persistentBufferSize(
         fusion, runtime_info, persistent_buffers);
@@ -880,17 +898,16 @@ bool SchedulerEntry::canSchedule(
     ScheduleHeuristic sh,
     Fusion* fusion,
     SchedulerRuntimeInfo& runtime_info,
-    bool input_dependent_check_only) {
+    HeuristicSummary* data_cache) {
   switch (sh) {
     case ScheduleHeuristic::PointWise:
-      return PointWiseScheduler::canSchedule(
-          fusion, runtime_info, input_dependent_check_only);
+      return PointWiseScheduler::canSchedule(fusion, runtime_info, data_cache);
     case ScheduleHeuristic::Reduction:
       return SingleReductionScheduler::canSchedule(
-          fusion, runtime_info, input_dependent_check_only);
+          fusion, runtime_info, data_cache);
     case ScheduleHeuristic::Normalization:
       return NormalizationScheduler::canSchedule(
-          fusion, runtime_info, input_dependent_check_only);
+          fusion, runtime_info, data_cache);
     default:
       TORCH_INTERNAL_ASSERT(false, "unreachable");
       return false;
