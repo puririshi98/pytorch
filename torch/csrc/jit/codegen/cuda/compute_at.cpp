@@ -58,7 +58,8 @@ bool validateDomain(TensorView* tv, TensorDomain* new_td) {
 unsigned int getReplayablePosPasC(
     TensorView* producer,
     TensorView* consumer,
-    const ComputeAtRootDomainMap& root_map_) {
+    const ComputeAtRootDomainMap& root_map_,
+    ComputeAtMode mode) {
   // Grab dimensions in producer and consumer that are mappable to eachother
   // based on the computeAtRootDomainMap. This will tell us which dimensions
   // can be inlined based on avoiding trying to inline reduction structures.
@@ -69,9 +70,11 @@ unsigned int getReplayablePosPasC(
   // not be inlined to vectorized dimensions in consumer.
   auto c_dom = consumer->domain()->domain();
   auto vector_dim_it =
-      std::find_if(c_dom.begin(), c_dom.end(), [](IterDomain* id) {
+      std::find_if(c_dom.begin(), c_dom.end(), [&mode](IterDomain* id) {
         return isParallelTypeVectorize(id->getParallelType()) ||
-            id->getParallelType() == ParallelType::Unroll;
+            ((mode == ComputeAtMode::BestEffort ||
+              mode == ComputeAtMode::MostInlined) &&
+             id->getParallelType() == ParallelType::Unroll);
       });
 
   // Limit max position based on vectorized dims in consumer.
@@ -97,7 +100,9 @@ unsigned int getReplayablePosPasC(
       // vectorized, or to a producer dim that's a block broadcast, limit max
       // compute at by it
       if (isParallelTypeVectorize(p_id->getParallelType()) ||
-          p_id->getParallelType() == ParallelType::Unroll) {
+          ((mode == ComputeAtMode::BestEffort ||
+            mode == ComputeAtMode::MostInlined) &&
+           p_id->getParallelType() == ParallelType::Unroll)) {
         max_consumer_pos = consumer_pos - 1;
       }
     }
@@ -140,7 +145,8 @@ unsigned int getReplayablePosPasC(
 unsigned int getReplayablePosCasP(
     TensorView* consumer,
     TensorView* producer,
-    const ComputeAtRootDomainMap& root_map_) {
+    const ComputeAtRootDomainMap& root_map_,
+    ComputeAtMode mode) {
   // Grab dimensions in producer and consumer that are mappable to eachother
   // based on the computeAtRootDomainMap. This will tell us which dimensions
   // can be inlined based on avoiding trying to inline reduction structures.
@@ -154,9 +160,11 @@ unsigned int getReplayablePosCasP(
       });
 
   auto first_vectorized_axis =
-      std::find_if(p_dom.begin(), first_reduction, [](IterDomain* id) {
+      std::find_if(p_dom.begin(), first_reduction, [&mode](IterDomain* id) {
         return isParallelTypeVectorize(id->getParallelType()) ||
-            id->getParallelType() == ParallelType::Unroll;
+            ((mode == ComputeAtMode::BestEffort ||
+              mode == ComputeAtMode::MostInlined) &&
+             id->getParallelType() == ParallelType::Unroll);
       });
 
   auto max_producer_pos = std::distance(p_dom.begin(), first_vectorized_axis);
@@ -179,7 +187,9 @@ unsigned int getReplayablePosCasP(
       // If we find a producer dim that maps to a consumer vectorized dim, limit
       // max compute at by it
       if (isParallelTypeVectorize(c_id->getParallelType()) ||
-          c_id->getParallelType() == ParallelType::Unroll) {
+          ((mode == ComputeAtMode::BestEffort ||
+            mode == ComputeAtMode::MostInlined) &&
+           c_id->getParallelType() == ParallelType::Unroll)) {
         max_producer_pos = producer_pos - 1;
       }
     }
@@ -346,7 +356,7 @@ unsigned int ComputeAt::backwardComputeAt_impl(
   FUSER_PERF_SCOPE("backwardComputeAt_impl");
 
   auto max_consumer_compute_at_pos =
-      getReplayablePosPasC(producer, consumer, root_map_);
+      getReplayablePosPasC(producer, consumer, root_map_, mode_);
   if (mode_ == ComputeAtMode::BestEffort) {
     consumer_compute_at_pos =
         std::min(consumer_compute_at_pos, max_consumer_compute_at_pos);
@@ -413,7 +423,7 @@ unsigned int ComputeAt::forwardComputeAt_impl(
   FUSER_PERF_SCOPE("forwardComputeAt_impl");
 
   auto max_producer_compute_at_pos =
-      getReplayablePosCasP(consumer, producer, root_map_);
+      getReplayablePosCasP(consumer, producer, root_map_, mode_);
 
   if (mode_ == ComputeAtMode::BestEffort) {
     producer_compute_at_pos =
