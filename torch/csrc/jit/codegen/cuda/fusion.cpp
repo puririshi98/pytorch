@@ -463,6 +463,8 @@ StmtNameType Fusion::registerStatement(Statement* stmt) {
 }
 
 void Fusion::resetTvUses() {
+  FUSER_PERF_SCOPE("Fusion::resetTvUses");
+
   // getExprs only uses definition, so even if we've modified uses already to
   // remove dead exprs, this could reinsert them. getExprs is also boundeds by
   // inputs as registered inputs will return nullptr as their definition.
