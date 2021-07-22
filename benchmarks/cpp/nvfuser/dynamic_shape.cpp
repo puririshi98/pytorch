@@ -27,7 +27,7 @@ TensorView* makeConcreteTensor(
   return TensorViewBuilder().shape(shape).dtype(dtype).build();
 }
 
-static auto getLayerNormRuntime(
+static auto getLayerBackwardNormRuntime(
     std::unique_ptr<Fusion> fusion_ptr,
     std::unique_ptr<FusionExecutorCache>& fec,
     std::vector<at::IValue>& aten_inputs,
@@ -97,7 +97,8 @@ static auto getLayerNormRuntime(
   return fec->getMostRecentKernelRuntime();
 }
 
-static void LayerNorm_HeuristicLookup(benchmark::State& benchmark_state) {
+static void LayerNormBackward_HeuristicLookup(
+    benchmark::State& benchmark_state) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   FusionGuard fg(fusion_ptr.get());
 
@@ -108,7 +109,7 @@ static void LayerNorm_HeuristicLookup(benchmark::State& benchmark_state) {
   std::vector<int64_t> shape{20, 100, 35, 67};
   std::vector<int64_t> norm_shape{67};
 
-  auto runtime = getLayerNormRuntime(
+  auto runtime = getLayerBackwardNormRuntime(
       std::move(fusion_ptr), fec, aten_inputs, shape, norm_shape);
   TORCH_INTERNAL_ASSERT(
       runtime->getMaybeHeuristicsFor(aten_inputs).has_value());
@@ -119,4 +120,58 @@ static void LayerNorm_HeuristicLookup(benchmark::State& benchmark_state) {
   }
 }
 
-BENCHMARK(LayerNorm_HeuristicLookup)->Unit(benchmark::kMicrosecond);
+static auto getLayerForwardNormRuntime(
+    std::unique_ptr<Fusion> fusion_ptr,
+    std::unique_ptr<FusionExecutorCache>& fec,
+    std::vector<at::IValue>& aten_inputs,
+    std::vector<int64_t>& shape,
+    std::vector<int64_t>& norm_shape) {
+  Fusion& fusion = *fusion_ptr.get();
+
+  const float kEps = 1e-5;
+  Double* eps_ptr = new Double(kEps);
+
+  auto input = makeSymbolicTensor(shape.size());
+  fusion.addInput(input);
+
+  auto result = layer_norm(input, norm_shape, nullptr, nullptr, eps_ptr);
+
+  fusion.addOutput(result.output);
+  fusion.addOutput(result.mean);
+  fusion.addOutput(result.invstd);
+
+  auto options = at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0);
+  at::Tensor aten_input = at::randn(shape, options);
+
+  fec = std::make_unique<FusionExecutorCache>(std::move(fusion_ptr));
+  aten_inputs = {aten_input};
+  auto cg_outputs = fec->runFusionWithInputs(aten_inputs);
+
+  return fec->getMostRecentKernelRuntime();
+}
+
+static void LayerNormForward_HeuristicLookup(
+    benchmark::State& benchmark_state) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  FusionGuard fg(fusion_ptr.get());
+
+  // PreAllocate
+  std::unique_ptr<FusionExecutorCache> fec;
+  std::vector<at::IValue> aten_inputs;
+
+  std::vector<int64_t> shape{20, 100, 35, 67};
+  std::vector<int64_t> norm_shape{67};
+
+  auto runtime = getLayerForwardNormRuntime(
+      std::move(fusion_ptr), fec, aten_inputs, shape, norm_shape);
+  TORCH_INTERNAL_ASSERT(
+      runtime->getMaybeHeuristicsFor(aten_inputs).has_value());
+
+  for (auto _ : benchmark_state) {
+    // Setup (not included in the measurement)
+    runtime->getMaybeHeuristicsFor(aten_inputs);
+  }
+}
+
+BENCHMARK(LayerNormBackward_HeuristicLookup)->Unit(benchmark::kMicrosecond);
+BENCHMARK(LayerNormForward_HeuristicLookup)->Unit(benchmark::kMicrosecond);

@@ -210,9 +210,10 @@ class TORCH_CUDA_CU_API FusionHeuristics {
   //!  for the fusion owning the given expression
   explicit FusionHeuristics(
       ScheduleHeuristic schedule_heuristic,
-      SchedulerRuntimeInfo& runtime_info) {
+      SchedulerRuntimeInfo& runtime_info,
+      HeuristicSummary* data_cache = nullptr) {
     heuristics_.emplace_back(SchedulerEntry::makeEntry(
-        schedule_heuristic, runtime_info.fusion(), runtime_info));
+        schedule_heuristic, runtime_info.fusion(), runtime_info, data_cache));
     is_segmented_ = false;
   }
 
