@@ -635,6 +635,29 @@ ComputeAtRootDomainMapBuilder::ComputeAtRootDomainMapBuilder(
   TORCH_INTERNAL_ASSERT(pending_map_.empty());
 }
 
+// Set concrete domains for broadcast domains that never get joined
+// with a concrete domain. Just set its own domain as a concrete
+// domain, which is not concrete but is sufficient for this analysis.
+void ComputeAtRootDomainMapBuilder::initializeBcastMap(
+    const TensorView* tv,
+    const IterDomain* id) {
+  TORCH_INTERNAL_ASSERT(id->isBroadcast(), "Not a broadcast axis");
+  auto key = DomainKey(tv->domain(), id);
+  auto it = root_map_.bcast_map_.find(key);
+  if (it != root_map_.bcast_map_.end()) {
+    // already initialized.
+    return;
+  }
+
+  // This initialization should be only used for fusion output tensors and
+  // outputs of multi-consumer expressions that are not fusion outputs.
+  TORCH_INTERNAL_ASSERT(
+      tv->isFusionOutput() || tv->definition()->outputs().size() > 1,
+      "Invalid tensor to initialize bcast map: t",
+      tv->name());
+  root_map_.bcast_map_.insert({key, {id}});
+}
+
 void ComputeAtRootDomainMapBuilder::addToPendingList(
     const DomainKey& producer,
     const DomainKey& consumer) {
@@ -836,6 +859,7 @@ void ComputeAtRootDomainMapBuilder::handle(TensorView* tv) {
   const auto root = TensorDomain::noReductions(td->getMaybeRFactorDomain());
   for (auto id : root) {
     if (id->isBroadcast()) {
+      initializeBcastMap(tv, id);
       for (const auto& key : root_map_.getConcretizedKeys(td, id)) {
         mapAllConsumers(key);
       }
